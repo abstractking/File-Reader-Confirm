@@ -363,6 +363,23 @@ app.post("/webhooks/slack", async (req, res) => {
       return;
     }
 
+    // ── PROPOSER edit request ───────────────────────
+    if (actionId === "proposal_edit") {
+      const [approvalId, taskId] = value.split("::");
+      const { query: dbQuery }   = await import("../../core/db");
+      const taskRows = await dbQuery<any>(
+        "SELECT t.*, row_to_json(p.*) AS project FROM tasks t LEFT JOIN projects p ON p.id = t.project_id WHERE t.id = $1",
+        [taskId]
+      );
+      const raw = taskRows[0];
+      if (raw) {
+        const project = typeof raw.project === "string" ? JSON.parse(raw.project) : raw.project;
+        const { postEditPrompt } = await import("../proposer/slack");
+        await postEditPrompt(project, approvalId, taskId);
+      }
+      return;
+    }
+
     // ── PRODUCER approval actions ───────────────────
     const approvalId = value;
     const decision   = actionId === "producer_approve" ? "approved" : "rejected";
