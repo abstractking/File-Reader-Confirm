@@ -21,7 +21,7 @@ Notes: ${project?.notes}
 
 Include: project overview, deliverables, timeline, investment, and next steps.`
     }],
-    maxTokens: 1500,
+    maxTokens: 5000,
   });
 
   return {
