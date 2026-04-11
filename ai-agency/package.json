@@ -4,7 +4,7 @@
   "description": "6-agent AI website production system",
   "main": "dist/agents/producer/index.js",
   "scripts": {
-    "dev":    "tsx watch agents/producer/index.ts",
+    "dev":    "tsx agents/producer/index.ts",
     "build":  "tsc",
     "start":  "node dist/agents/producer/index.js",
     "db:init": "tsx scripts/initDb.ts",
