@@ -5,7 +5,7 @@
 // when you enable PostgreSQL in your Repl
 // ─────────────────────────────────────────────
 
-import { Pool, PoolClient, QueryResult } from "pg";
+import { Pool, PoolClient, QueryResult, QueryResultRow } from "pg";
 
 // Replit injects this automatically — no manual config needed
 const pool = new Pool({
@@ -27,7 +27,7 @@ pool.on("error", (err) => {
 // ─────────────────────────────────────────────
 
 /** Run a single parameterized query */
-export async function query<T = any>(
+export async function query<T extends QueryResultRow = any>(
   sql: string,
   params: any[] = []
 ): Promise<T[]> {
@@ -41,7 +41,7 @@ export async function query<T = any>(
 }
 
 /** Run a query expecting exactly one row (throws if none) */
-export async function queryOne<T = any>(
+export async function queryOne<T extends QueryResultRow = any>(
   sql: string,
   params: any[] = []
 ): Promise<T | null> {

@@ -281,15 +281,3 @@ export async function handleReject(
   await log("SCOUT", "lead_rejected", { leadId }, "success");
 }
 
-// ─────────────────────────────────────────────
-// Needed imports (lazy to avoid circular)
-// ─────────────────────────────────────────────
-async function insertProject(data: any) {
-  const { insertProject: ip } = await import("../../core/queries");
-  return ip(data);
-}
-
-async function insertTask(data: any) {
-  const { insertTask: it } = await import("../../core/queries");
-  return it(data);
-}
