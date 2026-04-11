@@ -30,7 +30,7 @@ outputType = "webview"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd /home/runner/workspace/ai-agency && npm run dev"
-waitForPort = 3000
+waitForPort = 8080
 
 [agent]
 stack = "PNPM_WORKSPACE"
@@ -55,3 +55,8 @@ externalPort = 80
 [[ports]]
 localPort = 8082
 externalPort = 3001
+
+[userenv]
+
+[userenv.shared]
+PORT = "8080"

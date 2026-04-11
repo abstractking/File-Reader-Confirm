@@ -31,7 +31,7 @@ import {
 // ─────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────
-const PORT                 = parseInt(process.env.PORT ?? "3000");
+const PORT                 = parseInt(process.env.PORT ?? "8080");
 const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET!;
 const POLL_INTERVAL        = "*/2 * * * *";    // every 2 minutes
 const MAX_TASKS_PER_TICK   = 3;
