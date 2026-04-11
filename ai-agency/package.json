@@ -1,0 +1,30 @@
+{
+  "name": "ai-agency",
+  "version": "1.0.0",
+  "description": "6-agent AI website production system",
+  "main": "dist/agents/producer/index.js",
+  "scripts": {
+    "dev":    "tsx watch agents/producer/index.ts",
+    "build":  "tsc",
+    "start":  "node dist/agents/producer/index.js",
+    "db:init": "tsx scripts/initDb.ts",
+    "db:seed": "tsx scripts/seed.ts",
+    "test:producer": "tsx scripts/testProducer.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk":  "^0.24.0",
+    "@slack/web-api":     "^7.0.0",
+    "express":            "^4.19.0",
+    "node-cron":          "^3.0.3",
+    "pg":                 "^8.11.5",
+    "dotenv":             "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/express":  "^4.17.21",
+    "@types/node":     "^20.0.0",
+    "@types/node-cron":"^3.0.11",
+    "@types/pg":       "^8.11.5",
+    "tsx":             "^4.11.0",
+    "typescript":      "^5.4.5"
+  }
+}

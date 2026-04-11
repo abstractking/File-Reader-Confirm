@@ -24,13 +24,13 @@ args = "PRODUCER"
 name = "PRODUCER"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /tmp/ai-agency-extracted && npm run dev"
-waitForPort = 3000
-
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/workspace/ai-agency && npm run dev"
+waitForPort = 3000
 
 [agent]
 stack = "PNPM_WORKSPACE"
