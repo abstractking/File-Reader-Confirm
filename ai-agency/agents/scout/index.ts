@@ -1,133 +1,121 @@
 // agents/scout/index.ts
 // ═════════════════════════════════════════════════════════
-//  SCOUT — Lead Generation Agent
-//  Scrapes Google Maps for local service businesses,
-//  scores them with Claude, sends each to Slack for
-//  your approval before anything enters the pipeline.
+//  SCOUT — Lead Qualification Agent (Website Input Mode)
+//
+//  You manually provide a business website URL.
+//  SCOUT fetches the page, extracts info, scores
+//  the lead with Claude, then sends a Slack card
+//  for your Approve / Reject decision.
+//
+//  Input fields (all passed via task.input_data):
+//    website_url  — required, e.g. "https://joesbarbershop.com"
+//    business_name — optional override (if auto-detect is wrong)
+//    niche        — optional, e.g. "barbershop"  (default: "local business")
+//    location     — optional, e.g. "Lake Charles, LA" (default: "Unknown")
 // ═════════════════════════════════════════════════════════
 
 import { Task, AgentRunResult }         from "../../core/types";
 import { log }                          from "../../core/logger";
 import { insertLead, getLeadsByStatus } from "../../core/queries";
 import { sendLeadCard }                 from "./slack";
-import { scrapeGoogleMaps }             from "./scraper";
+import { scrapeFromUrl }                from "./scraper";
 import { scoreLead }                    from "./scorer";
-import { NICHES, TARGET_LOCATIONS }     from "./config";
 
 // ─────────────────────────────────────────────
 // Main run() — called by PRODUCER dispatcher
 // ─────────────────────────────────────────────
 export async function run(task: Task): Promise<AgentRunResult> {
-  const location = (task.input_data?.location as string) ?? TARGET_LOCATIONS[0];
-  const niche    = (task.input_data?.niche    as string) ?? NICHES[0].keyword;
+  const websiteUrl   = (task.input_data?.website_url   as string | undefined)?.trim();
+  const niche        = (task.input_data?.niche         as string | undefined)?.trim() ?? "local business";
+  const location     = (task.input_data?.location      as string | undefined)?.trim() ?? "Unknown";
+  const nameOverride = (task.input_data?.business_name as string | undefined)?.trim();
 
-  await log("SCOUT", "run_started", { location, niche }, "success", task.project_id || null);
-
-  // 1. Scrape Google Maps for businesses in this niche + location
-  const rawLeads = await scrapeGoogleMaps(niche, location);
-
-  if (!rawLeads.length) {
+  if (!websiteUrl) {
     return {
-      summary: `No leads found for "${niche}" in ${location}`,
-      data:    { leads_found: 0, niche, location }
+      summary: "SCOUT requires a website_url in input_data",
+      data:    { error: "missing_website_url" },
     };
   }
 
-  // 2. Score each lead with Claude
-  const scoredLeads = await Promise.all(
-    rawLeads.map(lead => scoreLead(lead))
-  );
+  await log("SCOUT", "run_started", { websiteUrl, niche, location }, "success", task.project_id || null);
 
-  // 3. Deduplicate against existing leads already in DB
-  const existingLeads = await getLeadsByStatus("new");
-  const existingNames = new Set(existingLeads.map(r => r.business_name.toLowerCase()));
-  const existingPhones = new Set(existingLeads.map(r => r.phone ?? "").filter(Boolean));
+  // 1. Fetch and parse the business website
+  const rawLead = await scrapeFromUrl(websiteUrl, niche, location);
 
-  const freshLeads = scoredLeads.filter(l =>
-    !existingNames.has(l.business_name.toLowerCase()) &&
-    !(l.phone && existingPhones.has(l.phone))
-  );
-
-  // 4. Save fresh leads to DB + send each to Slack for YOUR approval
-  //    Nothing converts to a project until you click Approve
-  let saved = 0;
-  for (const lead of freshLeads) {
-    try {
-      const dbLead = await insertLead({
-        source:        "google_maps",
-        business_name: lead.business_name,
-        contact_name:  lead.contact_name  ?? null,
-        email:         lead.email         ?? null,
-        phone:         lead.phone         ?? null,
-        website_url:   lead.website_url   ?? null,
-        niche:         lead.niche,
-        location:      lead.location,
-        notes:         lead.notes         ?? null,
-        score:         lead.score,
-        status:        "new",
-      });
-
-      // Send to Slack — you decide qualify/reject per lead
-      await sendLeadCard(dbLead);
-      saved++;
-
-      // Avoid Slack rate limits between cards
-      await sleep(800);
-
-    } catch (err: any) {
-      await log(
-        "SCOUT", "lead_save_error",
-        { error: err.message, business: lead.business_name },
-        "error"
-      );
-    }
+  if (!rawLead) {
+    return {
+      summary: `Could not retrieve any data from ${websiteUrl}`,
+      data:    { error: "scrape_failed", websiteUrl },
+    };
   }
 
+  // Allow manual business name override
+  if (nameOverride) rawLead.business_name = nameOverride;
+
+  // 2. Score with Claude
+  const scoredLead = await scoreLead(rawLead);
+
+  // 3. Deduplicate — skip if this website URL already exists
+  const existingLeads = await getLeadsByStatus("new");
+  const existingUrls  = new Set(existingLeads.map(r => (r.website_url ?? "").toLowerCase()).filter(Boolean));
+  const existingNames = new Set(existingLeads.map(r => r.business_name.toLowerCase()));
+
+  const isDuplicate =
+    (scoredLead.website_url && existingUrls.has(scoredLead.website_url.toLowerCase())) ||
+    existingNames.has(scoredLead.business_name.toLowerCase());
+
+  if (isDuplicate) {
+    await log("SCOUT", "duplicate_skipped", { business: scoredLead.business_name, url: websiteUrl }, "warning", null);
+    return {
+      summary: `${scoredLead.business_name} is already in the pipeline`,
+      data:    { duplicate: true, business_name: scoredLead.business_name },
+    };
+  }
+
+  // 4. Save to DB and send to Slack for your Approve / Reject
+  const dbLead = await insertLead({
+    source:        "manual_url",
+    business_name: scoredLead.business_name,
+    contact_name:  scoredLead.contact_name  ?? null,
+    email:         scoredLead.email         ?? null,
+    phone:         scoredLead.phone         ?? null,
+    website_url:   scoredLead.website_url   ?? null,
+    niche:         scoredLead.niche,
+    location:      scoredLead.location,
+    notes:         scoredLead.notes         ?? null,
+    score:         scoredLead.score,
+    status:        "new",
+  });
+
+  await sendLeadCard(dbLead);
+
   await log(
-    "SCOUT", "run_complete",
-    { scraped: rawLeads.length, saved, duplicates_skipped: scoredLeads.length - freshLeads.length },
-    "success"
+    "SCOUT", "lead_sent_to_slack",
+    { business: dbLead.business_name, score: scoredLead.score, url: websiteUrl },
+    "success",
+    null
   );
 
   return {
-    summary: `SCOUT found ${rawLeads.length} businesses, saved ${saved} new leads for your review in Slack`,
+    summary: `SCOUT qualified "${dbLead.business_name}" (score: ${scoredLead.score}) — check Slack to approve or reject`,
     data: {
-      location,
+      lead_id:       dbLead.id,
+      business_name: dbLead.business_name,
+      website_url:   websiteUrl,
+      score:         scoredLead.score,
       niche,
-      total_scraped:       rawLeads.length,
-      new_leads_saved:     saved,
-      duplicates_skipped:  scoredLeads.length - freshLeads.length,
-    }
+      location,
+    },
   };
 }
 
 // ─────────────────────────────────────────────
-// Standalone cron runner — SCOUT can also run
-// on its own schedule independently of PRODUCER
-// Usage: npx tsx agents/scout/cron.ts
+// runAllTargets — DISABLED in website-input mode
+// Re-enable when Google Places API is activated
 // ─────────────────────────────────────────────
 export async function runAllTargets(): Promise<void> {
-  await log("SCOUT", "cron_started", { targets: TARGET_LOCATIONS.length * NICHES.length }, "success", null);
-
-  for (const location of TARGET_LOCATIONS) {
-    for (const niche of NICHES) {
-      try {
-        const fakeTask: Task = {
-          id: "cron", created_at: new Date(), updated_at: new Date(),
-          project_id: "", agent: "SCOUT", task_type: "scrape_leads",
-          status: "in_progress", priority: 5, retries: 0,
-          input_data: { location, niche: niche.keyword },
-          output_data: null, error_log: null,
-        };
-        await run(fakeTask);
-        await sleep(3000); // 3s between searches to be polite
-      } catch (err: any) {
-        await log("SCOUT", "niche_run_error", { location, niche: niche.keyword, error: err.message }, "error", null);
-      }
-    }
-  }
-
-  await log("SCOUT", "cron_complete", {}, "success", null);
+  await log("SCOUT", "cron_skipped", { reason: "Google Places API inactive — using manual URL input mode" }, "warning", null);
+  console.log("SCOUT cron is disabled. Submit leads manually via website_url input.");
 }
 
 function sleep(ms: number) {
