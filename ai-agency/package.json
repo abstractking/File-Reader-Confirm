@@ -3,10 +3,11 @@
   "version": "1.0.0",
   "description": "6-agent AI website production system",
   "main": "dist/agents/producer/index.js",
+  "packageManager": "pnpm@10.26.1",
   "scripts": {
     "dev":    "tsx agents/producer/index.ts",
     "build":  "tsc",
-    "start":  "node dist/agents/producer/index.js",
+    "start":  "tsx agents/producer/index.ts",
     "db:init": "tsx scripts/initDb.ts",
     "db:seed": "tsx scripts/seed.ts",
     "test:producer": "tsx scripts/testProducer.ts",
