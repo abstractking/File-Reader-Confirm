@@ -9,7 +9,9 @@
     "start":  "node dist/agents/producer/index.js",
     "db:init": "tsx scripts/initDb.ts",
     "db:seed": "tsx scripts/seed.ts",
-    "test:producer": "tsx scripts/testProducer.ts"
+    "test:producer": "tsx scripts/testProducer.ts",
+    "scout":         "tsx agents/scout/cron.ts",
+    "scout:once":    "tsx agents/scout/runOnce.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk":  "^0.24.0",

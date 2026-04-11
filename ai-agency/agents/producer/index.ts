@@ -344,8 +344,28 @@ app.post("/webhooks/slack", async (req, res) => {
     const action   = payload.actions?.[0];
     if (!action) return;
 
-    const approvalId = action.value as string;
-    const decision   = action.action_id === "producer_approve" ? "approved" : "rejected";
+    const actionId   = action.action_id as string;
+    const value      = action.value     as string;
+    const msgTs      = payload.container?.message_ts as string;
+    const msgChannel = payload.container?.channel_id  as string;
+
+    // ── SCOUT lead actions ──────────────────────────
+    if (actionId === "scout_qualify") {
+      const [leadId, pkg] = value.split("::");
+      const { handleQualify } = await import("../scout/slack");
+      await handleQualify(leadId, pkg ?? "growth", msgTs, msgChannel);
+      return;
+    }
+
+    if (actionId === "scout_reject") {
+      const { handleReject } = await import("../scout/slack");
+      await handleReject(value, msgTs, msgChannel);
+      return;
+    }
+
+    // ── PRODUCER approval actions ───────────────────
+    const approvalId = value;
+    const decision   = actionId === "producer_approve" ? "approved" : "rejected";
 
     await handleApproval(approvalId, decision);
 
