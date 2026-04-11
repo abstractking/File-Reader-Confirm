@@ -1,0 +1,60 @@
+Good catch. The problem is straightforward — the Replit public URL has an @ symbol in it which breaks curl by making it treat everything before @ as credentials and everything after as the hostname.
+Here's the immediate fix:
+
+Tell Replit AI This Exactly
+The curl URL is broken because the @ symbol in the Replit domain 
+corrupts the hostname parsing. Fix this two ways:
+
+1. In the shell, use localhost instead of the public URL since 
+   we're running commands inside the same Replit environment:
+
+curl -X POST http://localhost:3000/scout/submit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "business_name": "Busy Bees Cleaning Company",
+    "website_url": "https://busybeescleaningcompany.net/",
+    "niche": "cleaning service",
+    "location": "Lake Charles, LA"
+  }'
+
+2. Also add a /scout/submit endpoint to the PRODUCER server 
+   (agents/producer/index.ts) that accepts manual lead input:
+
+app.post("/scout/submit", async (req, res) => {
+  const { business_name, website_url, niche, location, phone, email, notes } = req.body;
+
+  if (!business_name || !niche || !location) {
+    res.status(400).json({ error: "business_name, niche, and location are required" });
+    return;
+  }
+
+  // Score the lead with a basic rule-based score
+  const score = website_url ? 45 : 75;
+
+  const lead = await insertLead({
+    source:        "manual",
+    business_name,
+    contact_name:  null,
+    email:         email ?? null,
+    phone:         phone ?? null,
+    website_url:   website_url ?? null,
+    niche,
+    location,
+    notes:         notes ?? (website_url ? "Has existing website" : "No website found"),
+    score,
+    status:        "new",
+  });
+
+  await sendLeadCard(lead);
+
+  res.json({ ok: true, lead_id: lead.id, message: "Lead saved and sent to Slack for review" });
+});
+
+Make sure to import insertLead from core/queries and 
+sendLeadCard from agents/scout/slack at the top of the file.
+
+Why This Works
+
+localhost:3000 bypasses the broken public URL entirely — since you're in the same Replit shell, the server is always reachable internally on port 3000
+The /scout/submit endpoint lets you manually push any business into the pipeline without needing Google Maps API or any scraping
+From now on all your manual lead testing uses localhost:3000 in the shell

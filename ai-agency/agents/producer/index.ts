@@ -17,7 +17,7 @@ import {
   updateApprovalSlackTs, getApprovalById,
   insertAsset, updateProjectStage,
   insertTask, getProjectById, requeueTask,
-  insertLog, getRecentLogs
+  insertLog, getRecentLogs, insertLead
 } from "../../core/queries";
 import {
   sendApprovalCard, updateApprovalCard,
@@ -395,49 +395,85 @@ app.post("/retrigger", async (req, res) => {
 });
 
 // ── SCOUT: manual lead submission ──
-// POST /scout/submit  { "website_url": "https://...", "niche": "...", "location": "...", "business_name": "(optional)" }
+// POST /scout/submit
+// Body: { website_url, niche, location, business_name?, phone?, email?, notes? }
+// Bypasses processTask — SCOUT manages its own Slack card
 app.post("/scout/submit", async (req, res) => {
-  const { website_url, niche, location, business_name } = req.body ?? {};
+  const {
+    website_url, niche, location,
+    business_name, phone, email, notes,
+  } = req.body ?? {};
 
   if (!website_url) {
     res.status(400).json({ error: "website_url is required" });
     return;
   }
 
-  try {
-    const task = await insertTask({
-      project_id:  null as any,
-      agent:       "SCOUT",
-      task_type:   "qualify_lead",
-      status:      "pending",
-      priority:    1,
-      input_data:  {
+  // Respond immediately — processing runs in background
+  res.json({
+    ok:      true,
+    message: `SCOUT is processing ${website_url} — check Slack shortly`,
+  });
+
+  // Run pipeline in background: scrape → score → save → Slack card
+  (async () => {
+    try {
+      await log("PRODUCER", "scout_submit_started", { website_url, niche, location }, "success");
+
+      const { scrapeFromUrl } = await import("../scout/scraper");
+      const { scoreLead }     = await import("../scout/scorer");
+      const { sendLeadCard }  = await import("../scout/slack");
+
+      // 1. Scrape the website
+      const raw = await scrapeFromUrl(
         website_url,
-        niche:         niche        ?? "local business",
-        location:      location     ?? "Unknown",
-        business_name: business_name ?? undefined,
-      },
-      output_data: null,
-      error_log:   null,
-      retries:     0,
-    });
+        niche     ?? "local business",
+        location  ?? "Unknown"
+      );
 
-    await log("PRODUCER", "scout_lead_queued", { website_url, niche, location }, "success");
+      if (!raw) {
+        await log("PRODUCER", "scout_scrape_failed", { website_url }, "error");
+        return;
+      }
 
-    // Run immediately instead of waiting for the next 2-minute heartbeat
-    processTask(task).catch(err =>
-      console.error("[PRODUCER] scout/submit task error:", err.message)
-    );
+      // Allow manual overrides
+      if (business_name) raw.business_name = business_name;
+      if (phone)         raw.phone         = phone;
+      if (email)         raw.email         = email;
+      if (notes)         raw.notes         = notes;
 
-    res.json({
-      ok:      true,
-      task_id: task.id,
-      message: `SCOUT is processing ${website_url} — check Slack for the approval card shortly`,
-    });
-  } catch (err: any) {
-    await log("PRODUCER", "scout_submit_error", { error: err.message }, "error");
-    res.status(500).json({ error: err.message });
-  }
+      // 2. Score with Claude
+      const scored = await scoreLead(raw);
+
+      // 3. Save to DB
+      const lead = await insertLead({
+        source:        "manual_url",
+        business_name: scored.business_name,
+        contact_name:  scored.contact_name  ?? null,
+        email:         scored.email         ?? null,
+        phone:         scored.phone         ?? null,
+        website_url:   scored.website_url   ?? null,
+        niche:         scored.niche,
+        location:      scored.location,
+        notes:         scored.notes         ?? null,
+        score:         scored.score,
+        status:        "new",
+      });
+
+      // 4. Send Slack card — Approve / Skip
+      await sendLeadCard(lead);
+
+      await log("PRODUCER", "scout_card_sent", {
+        lead_id: lead.id,
+        business: lead.business_name,
+        score: scored.score,
+      }, "success");
+
+    } catch (err: any) {
+      await log("PRODUCER", "scout_submit_error", { error: err.message, website_url }, "error");
+      console.error("[PRODUCER] scout/submit error:", err.message);
+    }
+  })();
 });
 
 // ── Dashboard — view recent logs + active projects ──
