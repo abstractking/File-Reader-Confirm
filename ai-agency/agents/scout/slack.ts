@@ -16,6 +16,11 @@ import { log }                from "../../core/logger";
 const slack   = new WebClient(process.env.SLACK_BOT_TOKEN!);
 const CHANNEL = process.env.SLACK_CHANNEL_ID!;
 
+// Truncate text to Slack's block limits
+function trunc(text: string, max: number): string {
+  return text.length > max ? text.slice(0, max - 1) + "…" : text;
+}
+
 // Score → emoji bar visual (e.g. 70 → "███████░░░")
 function scoreBar(score: number): string {
   const filled = Math.round(score / 10);
@@ -62,7 +67,7 @@ export async function sendLeadCard(lead: Lead): Promise<void> {
       // ── Header ──
       {
         type: "header",
-        text: { type: "plain_text", text: `🔍 New Lead — ${lead.business_name}` }
+        text: { type: "plain_text", text: trunc(`🔍 New Lead — ${lead.business_name}`, 150) }
       },
 
       // ── Score bar ──
@@ -92,7 +97,7 @@ export async function sendLeadCard(lead: Lead): Promise<void> {
         type: "section" as const,
         text: {
           type: "mrkdwn" as const,
-          text: `*Why this lead:*\n${notes.split("\n\n💡")[1]?.split("\n📣")[0]?.trim() ?? notes.slice(0, 200)}`
+          text: trunc(`*Why this lead:*\n${notes.split("\n\n💡")[1]?.split("\n📣")[0]?.trim() ?? notes.slice(0, 300)}`, 3000)
         }
       }] : []),
 
@@ -101,7 +106,7 @@ export async function sendLeadCard(lead: Lead): Promise<void> {
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*💬 Suggested outreach opener:*\n_"${outreach}"_`
+          text: trunc(`*💬 Suggested outreach opener:*\n_"${outreach}"_`, 3000)
         }
       },
 
@@ -139,7 +144,7 @@ export async function sendLeadCard(lead: Lead): Promise<void> {
       {
         type: "context",
         elements: [
-          { type: "mrkdwn", text: `Lead ID: \`${lead.id}\` • Found by SCOUT via Google Maps` }
+          { type: "mrkdwn", text: `Lead ID: \`${lead.id}\` • Source: ${lead.source}` }
         ]
       }
     ]
