@@ -114,7 +114,7 @@ export async function getPendingTasks(limit = 3): Promise<Task[]> {
       t.*,
       row_to_json(p.*) AS project
     FROM tasks t
-    JOIN projects p ON p.id = t.project_id
+    LEFT JOIN projects p ON p.id = t.project_id
     WHERE t.status = 'pending'
     ORDER BY t.priority ASC, t.created_at ASC
     LIMIT $1

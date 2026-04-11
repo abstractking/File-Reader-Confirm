@@ -394,6 +394,52 @@ app.post("/retrigger", async (req, res) => {
   res.json({ ok: true, message: `Task ${task_id} re-queued. Will run on next heartbeat.` });
 });
 
+// ── SCOUT: manual lead submission ──
+// POST /scout/submit  { "website_url": "https://...", "niche": "...", "location": "...", "business_name": "(optional)" }
+app.post("/scout/submit", async (req, res) => {
+  const { website_url, niche, location, business_name } = req.body ?? {};
+
+  if (!website_url) {
+    res.status(400).json({ error: "website_url is required" });
+    return;
+  }
+
+  try {
+    const task = await insertTask({
+      project_id:  null as any,
+      agent:       "SCOUT",
+      task_type:   "qualify_lead",
+      status:      "pending",
+      priority:    1,
+      input_data:  {
+        website_url,
+        niche:         niche        ?? "local business",
+        location:      location     ?? "Unknown",
+        business_name: business_name ?? undefined,
+      },
+      output_data: null,
+      error_log:   null,
+      retries:     0,
+    });
+
+    await log("PRODUCER", "scout_lead_queued", { website_url, niche, location }, "success");
+
+    // Run immediately instead of waiting for the next 2-minute heartbeat
+    processTask(task).catch(err =>
+      console.error("[PRODUCER] scout/submit task error:", err.message)
+    );
+
+    res.json({
+      ok:      true,
+      task_id: task.id,
+      message: `SCOUT is processing ${website_url} — check Slack for the approval card shortly`,
+    });
+  } catch (err: any) {
+    await log("PRODUCER", "scout_submit_error", { error: err.message }, "error");
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Dashboard — view recent logs + active projects ──
 // GET /status
 app.get("/status", async (_req, res) => {
@@ -468,6 +514,7 @@ async function start() {
 ║  Heartbeat:  every 2 minutes              ║
 ║                                           ║
 ║  Webhook:    POST /webhooks/slack         ║
+║  Scout:      POST /scout/submit           ║
 ║  Retrigger:  POST /retrigger              ║
 ║  Health:     GET  /health                 ║
 ║  Status:     GET  /status                 ║
