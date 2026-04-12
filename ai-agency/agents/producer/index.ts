@@ -41,7 +41,7 @@ const MAX_TASKS_PER_TICK   = 3;
 // Edit this to change pipeline order
 // ─────────────────────────────────────────────
 const STAGE_MAP: Record<ProjectStage, StageTransition | null> = {
-  PROPOSAL: { nextStage: "DESIGN",    agent: "DESIGNER",  task_type: "create_wireframe"   },
+  PROPOSAL: { nextStage: "BUILD",     agent: "BUILDER",   task_type: "generate_site_code" },
   DESIGN:   { nextStage: "BUILD",     agent: "BUILDER",   task_type: "generate_site_code" },
   BUILD:    { nextStage: "LAUNCH",    agent: "BUILDER",   task_type: "deploy_site"        },
   LAUNCH:   { nextStage: "MARKET",    agent: "MARKETER",  task_type: "create_seo_content" },
