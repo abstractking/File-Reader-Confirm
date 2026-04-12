@@ -24,10 +24,13 @@ export async function run(task: Task): Promise<AgentRunResult> {
 
   await log("BUILDER", "run_started", { project_id: project.id, client: project.client_name }, "success", project.id);
 
-  // Determine site structure from package
+  // Determine site structure — explicit override > package default
+  const explicitStructure = task.input_data?.structure as SiteStructure | undefined;
   const structure: SiteStructure =
-    project.package === "starter" ? "single" :
-    project.package === "growth"  ? "multi_with_booking" :
+    explicitStructure                      ? explicitStructure :
+    project.package === "starter"          ? "single" :
+    project.package === "basic"            ? "multi" :
+    project.package === "growth"           ? "multi_with_booking" :
     "multi_full";
 
   const pages = BUILDER_CONFIG.structures[structure];
