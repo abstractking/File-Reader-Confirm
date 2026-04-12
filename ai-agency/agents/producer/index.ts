@@ -324,20 +324,39 @@ function verifySlackSignature(req: express.Request): boolean {
 
 // ── Slack webhook — button clicks ──
 app.post("/webhooks/slack", async (req, res) => {
+  // ── Step 1: Parse raw body ──
+  const rawBody = req.body instanceof Buffer
+    ? req.body.toString()
+    : typeof req.body === "object" && req.body !== null
+    ? JSON.stringify(req.body)
+    : String(req.body ?? "");
+
+  // ── Step 2: Handle Slack URL verification challenge FIRST ──
+  // Must happen before signature check
+  let parsed: any = {};
+  try { parsed = JSON.parse(rawBody); } catch {}
+
+  if (parsed?.type === "url_verification") {
+    res.setHeader("Content-Type", "application/json");
+    res.status(200).json({ challenge: parsed.challenge });
+    return;
+  }
+
+  // ── Step 3: Verify Slack signature for all other requests ──
   if (!verifySlackSignature(req)) {
     res.status(401).send("Unauthorized");
     return;
   }
 
-  // Slack requires a 200 within 3 seconds — respond immediately
+  // Slack requires 200 within 3 seconds
   res.sendStatus(200);
 
   try {
-    const rawBody  = req.body instanceof Buffer ? req.body.toString() : req.body;
-    const params   = typeof rawBody === "string"
+    const params = typeof rawBody === "string"
       ? new URLSearchParams(rawBody)
       : new URLSearchParams(
-          Object.entries(rawBody as Record<string, string>).map(([k, v]) => [k, String(v)])
+          Object.entries(rawBody as Record<string, string>)
+            .map(([k, v]) => [k, String(v)])
         );
 
     const payload  = JSON.parse(params.get("payload") ?? "{}");
@@ -349,7 +368,6 @@ app.post("/webhooks/slack", async (req, res) => {
     const msgTs      = payload.container?.message_ts as string;
     const msgChannel = payload.container?.channel_id  as string;
 
-    // ── SCOUT lead actions ──────────────────────────
     if (actionId === "scout_qualify") {
       const [leadId, pkg] = value.split("::");
       const { handleQualify } = await import("../scout/slack");
@@ -363,26 +381,42 @@ app.post("/webhooks/slack", async (req, res) => {
       return;
     }
 
-    // ── PROPOSER edit request ───────────────────────
     if (actionId === "proposal_edit") {
       const [approvalId, taskId] = value.split("::");
       const { query: dbQuery }   = await import("../../core/db");
-      const taskRows = await dbQuery<any>(
-        "SELECT t.*, row_to_json(p.*) AS project FROM tasks t LEFT JOIN projects p ON p.id = t.project_id WHERE t.id = $1",
+      const projRows             = await dbQuery(
+        "SELECT p.* FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1",
         [taskId]
       );
-      const raw = taskRows[0];
-      if (raw) {
-        const project = typeof raw.project === "string" ? JSON.parse(raw.project) : raw.project;
+      const project = projRows[0];
+      if (project) {
         const { postEditPrompt } = await import("../proposer/slack");
         await postEditPrompt(project, approvalId, taskId);
       }
       return;
     }
 
-    // ── PRODUCER approval actions ───────────────────
     const approvalId = value;
     const decision   = actionId === "producer_approve" ? "approved" : "rejected";
+
+    if (decision === "approved") {
+      try {
+        const { query: dbQuery } = await import("../../core/db");
+        const taskRows = await dbQuery(
+          "SELECT t.*, row_to_json(p.*) AS project FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = (SELECT task_id FROM approvals WHERE id = $1)",
+          [approvalId]
+        );
+        const rawTask = taskRows[0] as any;
+        if (rawTask?.task_type === "generate_proposal") {
+          const { onApproved } = await import("../proposer/index");
+          const project = typeof rawTask.project === "string" ? JSON.parse(rawTask.project) : rawTask.project;
+          const output  = typeof rawTask.output_data === "string" ? JSON.parse(rawTask.output_data) : rawTask.output_data;
+          await onApproved({ ...rawTask, output_data: output }, project);
+        }
+      } catch (err: any) {
+        console.error("[PRODUCER] Post-approval hook error:", err.message);
+      }
+    }
 
     await handleApproval(approvalId, decision);
 

@@ -1,0 +1,123 @@
+Slack is sending a url_verification challenge to 
+/webhooks/slack but the server is returning challenge_failed.
+
+The challenge handler must be added BEFORE the signature 
+check in agents/producer/index.ts.
+
+Open agents/producer/index.ts and find this exact line:
+  app.post("/webhooks/slack", async (req, res) => {
+
+Replace the entire webhooks/slack route with this:
+
+app.post("/webhooks/slack", async (req, res) => {
+  // ── Step 1: Parse raw body ──
+  const rawBody = req.body instanceof Buffer
+    ? req.body.toString()
+    : typeof req.body === "object" && req.body !== null
+    ? JSON.stringify(req.body)
+    : String(req.body ?? "");
+
+  // ── Step 2: Handle Slack URL verification challenge FIRST ──
+  // Must happen before signature check
+  let parsed: any = {};
+  try { parsed = JSON.parse(rawBody); } catch {}
+
+  if (parsed?.type === "url_verification") {
+    res.setHeader("Content-Type", "application/json");
+    res.status(200).json({ challenge: parsed.challenge });
+    return;
+  }
+
+  // ── Step 3: Verify Slack signature for all other requests ──
+  if (!verifySlackSignature(req)) {
+    res.status(401).send("Unauthorized");
+    return;
+  }
+
+  // Slack requires 200 within 3 seconds
+  res.sendStatus(200);
+
+  try {
+    const params = typeof rawBody === "string"
+      ? new URLSearchParams(rawBody)
+      : new URLSearchParams(
+          Object.entries(rawBody as Record<string, string>)
+            .map(([k, v]) => [k, String(v)])
+        );
+
+    const payload  = JSON.parse(params.get("payload") ?? "{}");
+    const action   = payload.actions?.[0];
+    if (!action) return;
+
+    const actionId   = action.action_id as string;
+    const value      = action.value     as string;
+    const msgTs      = payload.container?.message_ts as string;
+    const msgChannel = payload.container?.channel_id  as string;
+
+    if (actionId === "scout_qualify") {
+      const [leadId, pkg] = value.split("::");
+      const { handleQualify } = await import("../scout/slack");
+      await handleQualify(leadId, pkg ?? "growth", msgTs, msgChannel);
+      return;
+    }
+
+    if (actionId === "scout_reject") {
+      const { handleReject } = await import("../scout/slack");
+      await handleReject(value, msgTs, msgChannel);
+      return;
+    }
+
+    if (actionId === "proposal_edit") {
+      const [approvalId, taskId] = value.split("::");
+      const { query: dbQuery }   = await import("../../core/db");
+      const projRows             = await dbQuery(
+        "SELECT p.* FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = $1",
+        [taskId]
+      );
+      const project = projRows[0];
+      if (project) {
+        const { postEditPrompt } = await import("../proposer/slack");
+        await postEditPrompt(project, approvalId, taskId);
+      }
+      return;
+    }
+
+    const approvalId = value;
+    const decision   = actionId === "producer_approve" ? "approved" : "rejected";
+
+    if (decision === "approved") {
+      try {
+        const { query: dbQuery } = await import("../../core/db");
+        const taskRows = await dbQuery(
+          "SELECT t.*, row_to_json(p.*) AS project FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = (SELECT task_id FROM approvals WHERE id = $1)",
+          [approvalId]
+        );
+        const rawTask = taskRows[0] as any;
+        if (rawTask?.task_type === "generate_proposal") {
+          const { onApproved } = await import("../proposer/index");
+          const project = typeof rawTask.project === "string" ? JSON.parse(rawTask.project) : rawTask.project;
+          const output  = typeof rawTask.output_data === "string" ? JSON.parse(rawTask.output_data) : rawTask.output_data;
+          await onApproved({ ...rawTask, output_data: output }, project);
+        }
+      } catch (err: any) {
+        console.error("[PRODUCER] Post-approval hook error:", err.message);
+      }
+    }
+
+    await handleApproval(approvalId, decision);
+
+  } catch (err: any) {
+    console.error("[PRODUCER] Webhook error:", err.message);
+    await log("PRODUCER", "webhook_error", { error: err.message }, "error");
+  }
+});
+
+After saving, restart the server and run this test:
+curl -X POST https://file-reader-confirm.replit.app/webhooks/slack \
+  -H "Content-Type: application/json" \
+  -d '{"type":"url_verification","challenge":"testchallenge123"}'
+
+It must return exactly:
+{"challenge":"testchallenge123"}
+
+Show me the curl output.
