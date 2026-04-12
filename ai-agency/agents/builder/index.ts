@@ -42,39 +42,37 @@ export async function run(task: Task): Promise<AgentRunResult> {
 
   const generatedFiles: Record<string, string> = {};
 
-  // 1. App.tsx
-  generatedFiles["App.tsx"] = await generateAppFile(project, pages, palette, wireframe, structure);
+  // Root config files (no Claude needed)
+  generatedFiles["package.json"]        = generatePackageJson(project);
+  generatedFiles["vite.config.ts"]      = generateViteConfig();
+  generatedFiles["tailwind.config.ts"]  = generateTailwindConfig(palette);
+  generatedFiles["postcss.config.js"]   = generatePostcssConfig();
+  generatedFiles["tsconfig.json"]       = generateTsconfig();
+  generatedFiles["index.html"]          = generateIndexHtml(project);
+  generatedFiles["README.md"]           = generateReadme(project, structure, pages);
+
+  // src/ files
+  generatedFiles["src/index.css"]  = generateIndexCss(palette);
+  generatedFiles["src/main.tsx"]   = generateMainTsx();
+
+  // 1. src/App.tsx — lives in src/ so relative imports work correctly
+  generatedFiles["src/App.tsx"] = await generateAppFile(project, pages, palette, wireframe, structure);
   await delay(400);
 
-  // 2. tailwind.config.ts
-  generatedFiles["tailwind.config.ts"] = generateTailwindConfig(palette);
-
-  // 3. index.css
-  generatedFiles["src/index.css"] = generateIndexCss(palette);
-
-  // 4. Per-page components
+  // 2. Per-page components under src/pages/
   for (const page of pages) {
     const fileName = `src/pages/${page}.tsx`;
     generatedFiles[fileName] = await generatePageComponent(project, page, palette, wireframe, structure);
     await delay(400);
   }
 
-  // 5. Shared components
+  // 3. Shared components under src/components/
   const sharedComponents = ["Navbar", "Footer", "ContactForm", "HeroSection"];
   for (const component of sharedComponents) {
     const fileName = `src/components/${component}.tsx`;
     generatedFiles[fileName] = await generateSharedComponent(project, component, palette);
     await delay(400);
   }
-
-  // 6. package.json
-  generatedFiles["package.json"] = generatePackageJson(project);
-
-  // 7. vite.config.ts
-  generatedFiles["vite.config.ts"] = generateViteConfig();
-
-  // 8. README.md
-  generatedFiles["README.md"] = generateReadme(project, structure, pages);
 
   const fileList = Object.keys(generatedFiles);
 
@@ -114,7 +112,7 @@ export async function run(task: Task): Promise<AgentRunResult> {
       file_count: fileList.length,
       tech_stack: BUILDER_CONFIG.tech_stack,
       preview: {
-        "App.tsx": (generatedFiles["App.tsx"] ?? "").slice(0, 500) + "...",
+        "src/App.tsx": (generatedFiles["src/App.tsx"] ?? "").slice(0, 500) + "...",
       }
     },
     metadata: { palette, structure }
@@ -343,6 +341,75 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
 })
+`;
+}
+
+function generatePostcssConfig(): string {
+  return `export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}
+`;
+}
+
+function generateTsconfig(): string {
+  return JSON.stringify({
+    compilerOptions: {
+      target:           "ES2020",
+      useDefineForClassFields: true,
+      lib:              ["ES2020", "DOM", "DOM.Iterable"],
+      module:           "ESNext",
+      skipLibCheck:     true,
+      moduleResolution: "bundler",
+      allowImportingTsExtensions: true,
+      resolveJsonModule: true,
+      isolatedModules:  true,
+      noEmit:           true,
+      jsx:              "react-jsx",
+      strict:           true,
+      noUnusedLocals:   true,
+      noUnusedParameters: true,
+      noFallthroughCasesInSwitch: true,
+    },
+    include: ["src"],
+    references: [{ path: "./tsconfig.node.json" }],
+  }, null, 2);
+}
+
+function generateIndexHtml(project: any): string {
+  const title = project.client_name ?? "Local Business";
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="${title} — professional local service" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <title>${title}</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+`;
+}
+
+function generateMainTsx(): string {
+  return `import React from 'react'
+import ReactDOM from 'react-dom/client'
+import App from './App'
+import './index.css'
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+)
 `;
 }
 
