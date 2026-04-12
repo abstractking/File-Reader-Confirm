@@ -48,6 +48,7 @@ export async function run(task: Task): Promise<AgentRunResult> {
   generatedFiles["tailwind.config.ts"]  = generateTailwindConfig(palette);
   generatedFiles["postcss.config.js"]   = generatePostcssConfig();
   generatedFiles["tsconfig.json"]       = generateTsconfig();
+  generatedFiles["tsconfig.node.json"]  = generateTsconfigNode();
   generatedFiles["index.html"]          = generateIndexHtml(project);
   generatedFiles["README.md"]           = generateReadme(project, structure, pages);
 
@@ -342,6 +343,19 @@ export default defineConfig({
   plugins: [react()],
 })
 `;
+}
+
+function generateTsconfigNode(): string {
+  return JSON.stringify({
+    compilerOptions: {
+      composite:        true,
+      skipLibCheck:     true,
+      module:           "ESNext",
+      moduleResolution: "bundler",
+      allowSyntheticDefaultImports: true,
+    },
+    include: ["vite.config.ts"],
+  }, null, 2);
 }
 
 function generatePostcssConfig(): string {
