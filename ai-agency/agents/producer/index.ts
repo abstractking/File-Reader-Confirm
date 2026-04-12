@@ -123,13 +123,50 @@ async function processTask(task: Task): Promise<void> {
 
     await log("PRODUCER", "task_failed", { task_id: task.id, error: err.message }, "error", task.project_id);
 
-    await sendAlert(
-      `🚨 *Task Failed*\n` +
-      `Agent: \`${task.agent}\` | Type: \`${task.task_type}\`\n` +
-      `Error: ${err.message}\n` +
-      `Task ID: \`${task.id}\`\n` +
-      `_Use \`POST /retrigger\` with this task ID to retry._`
-    );
+    await slack.chat.postMessage({
+      channel: SLACK_CHANNEL,
+      text: `🚨 Task Failed — ${task.agent} | ${task.task_type}`,
+      blocks: [
+        {
+          type: "header",
+          text: { type: "plain_text", text: "🚨 Task Failed" }
+        },
+        {
+          type: "section",
+          fields: [
+            { type: "mrkdwn", text: `*Agent:*\n${task.agent}`                          },
+            { type: "mrkdwn", text: `*Type:*\n${task.task_type}`                       },
+            { type: "mrkdwn", text: `*Error:*\n${err.message?.slice(0, 200)}`          },
+            { type: "mrkdwn", text: `*Task ID:*\n\`${task.id}\``                       },
+          ]
+        },
+        {
+          type: "actions",
+          block_id: `retry::${task.id}`,
+          elements: [
+            {
+              type:      "button",
+              text:      { type: "plain_text", text: "🔄  Retry Task" },
+              style:     "primary",
+              action_id: "retrigger_task",
+              value:     task.id,
+              confirm: {
+                title:   { type: "plain_text", text: "Retry this task?" },
+                text:    { type: "mrkdwn",     text: "This will re-queue the task and run it again." },
+                confirm: { type: "plain_text", text: "Yes, retry" },
+                deny:    { type: "plain_text", text: "Cancel" }
+              }
+            }
+          ]
+        },
+        {
+          type: "context",
+          elements: [
+            { type: "mrkdwn", text: `Or run: \`POST /retrigger\` with task_id: \`${task.id}\`` }
+          ]
+        }
+      ]
+    });
   }
 }
 
@@ -399,6 +436,29 @@ app.post("/webhooks/slack", async (req, res) => {
     if (actionId === "scout_reject") {
       const { handleReject } = await import("../scout/slack");
       await handleReject(value, msgTs, msgChannel);
+      return;
+    }
+
+    if (actionId === "retrigger_task") {
+      const success = await requeueTask(value);
+      await slack.chat.update({
+        channel: msgChannel,
+        ts:      msgTs,
+        text:    success
+          ? `🔄 Task re-queued — will run on next heartbeat.`
+          : `❌ Could not re-queue task \`${value}\` — may already be running.`,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: success
+                ? `🔄 *Retrying* — task \`${value}\` re-queued. Check back in ~2 minutes.`
+                : `❌ Could not re-queue task \`${value}\`.`
+            }
+          }
+        ]
+      });
       return;
     }
 

@@ -1,0 +1,215 @@
+Replit AI has the perfect plan. Two clean fixes. Tell it to apply both right now:
+
+---
+
+## Paste This Into Replit AI Chat
+
+```
+Apply both fixes now exactly as planned.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIX 1 — core/claude.ts
+Add retry logic with exponential backoff for 529 errors
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Replace the entire contents of core/claude.ts with this:
+
+import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
+
+export interface ClaudeMessage {
+  role:    "user" | "assistant";
+  content: string;
+}
+
+export interface AskClaudeOptions {
+  system?:     string;
+  messages:    ClaudeMessage[];
+  maxTokens?:  number;
+  model?:      string;
+}
+
+const RETRY_DELAYS = [5000, 10000, 20000]; // 5s, 10s, 20s
+
+export async function askClaude(opts: AskClaudeOptions): Promise<string> {
+  let lastError: any;
+
+  for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
+    try {
+      const response = await client.messages.create({
+        model:      opts.model ?? "claude-sonnet-4-5",
+        max_tokens: opts.maxTokens ?? 2048,
+        system:     opts.system,
+        messages:   opts.messages,
+      });
+
+      const block = response.content[0];
+      if (block.type !== "text") throw new Error("Unexpected Claude response type");
+      return block.text;
+
+    } catch (err: any) {
+      lastError = err;
+
+      // Only retry on 529 overloaded or 529-wrapped errors
+      const is529 = 
+        err?.status === 529 ||
+        err?.error?.type === "overloaded_error" ||
+        err?.message?.includes("overloaded") ||
+        err?.message?.includes("529");
+
+      if (!is529 || attempt === RETRY_DELAYS.length) {
+        throw err;
+      }
+
+      const delay = RETRY_DELAYS[attempt];
+      console.log(`[Claude] Overloaded (529) — retry ${attempt + 1}/3 in ${delay/1000}s...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError;
+}
+
+export async function askClaudeJSON<T = any>(
+  opts: AskClaudeOptions
+): Promise<T> {
+  const raw = await askClaude({
+    ...opts,
+    system: (opts.system ?? "") +
+      "\n\nIMPORTANT: Respond with ONLY valid JSON. No markdown, no backticks, no explanation.",
+  });
+
+  const clean = raw
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "")
+    .trim();
+
+  return JSON.parse(clean) as T;
+}
+
+export { client as claudeClient };
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIX 2 — agents/producer/index.ts
+Replace plain text failure alert with a Slack Retry button
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+In agents/producer/index.ts find the catch block inside 
+processTask() that calls sendAlert. It looks like this:
+
+    await sendAlert(
+      `🚨 *Task Failed* — ...`
+    );
+
+Replace that entire sendAlert call with this:
+
+    await slack.chat.postMessage({
+      channel: SLACK_CHANNEL,
+      text: `🚨 Task Failed — ${task.agent} | ${task.task_type}`,
+      blocks: [
+        {
+          type: "header",
+          text: { type: "plain_text", text: "🚨 Task Failed" }
+        },
+        {
+          type: "section",
+          fields: [
+            { type: "mrkdwn", text: `*Agent:*\n${task.agent}`      },
+            { type: "mrkdwn", text: `*Type:*\n${task.task_type}`   },
+            { type: "mrkdwn", text: `*Error:*\n${err.message?.slice(0, 200)}` },
+            { type: "mrkdwn", text: `*Task ID:*\n\`${task.id}\``   },
+          ]
+        },
+        {
+          type: "actions",
+          block_id: `retry::${task.id}`,
+          elements: [
+            {
+              type:      "button",
+              text:      { type: "plain_text", text: "🔄  Retry Task" },
+              style:     "primary",
+              action_id: "retrigger_task",
+              value:     task.id,
+              confirm: {
+                title:   { type: "plain_text", text: "Retry this task?" },
+                text:    { type: "mrkdwn", text: "This will re-queue the task and run it again." },
+                confirm: { type: "plain_text", text: "Yes, retry" },
+                deny:    { type: "plain_text", text: "Cancel" }
+              }
+            }
+          ]
+        },
+        {
+          type: "context",
+          elements: [
+            { type: "mrkdwn", text: `Or run: \`POST /retrigger\` with task_id: \`${task.id}\`` }
+          ]
+        }
+      ]
+    });
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FIX 3 — Handle retrigger_task button in webhook
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+In the POST /webhooks/slack action router, add this 
+BEFORE the producer_approve block:
+
+    if (actionId === "retrigger_task") {
+      const success = await requeueTask(value);
+      await slack.chat.update({
+        channel: msgChannel,
+        ts:      msgTs,
+        text:    success
+          ? `🔄 Task re-queued — will run on next heartbeat.`
+          : `❌ Could not re-queue task \`${value}\` — may already be running.`,
+        blocks: [
+          {
+            type: "section",
+            text: {
+              type: "mrkdwn",
+              text: success
+                ? `🔄 *Retrying* — task \`${value}\` re-queued. Check back in ~2 minutes.`
+                : `❌ Could not re-queue task \`${value}\`.`
+            }
+          }
+        ]
+      });
+      return;
+    }
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+After all three changes:
+1. Run: pnpm run build
+   Show me any TypeScript errors.
+
+2. If clean, restart:
+   pkill -f node || true
+   pnpm run start
+
+3. Then retrigger the failed Busy Bees proposal:
+   curl -X POST http://localhost:8080/retrigger \
+     -H "Content-Type: application/json" \
+     -d '{"task_id":"93bb31e9-56e5-4eeb-9ea4-ac6ecf632aa6"}'
+
+4. Show me the output — it should say task re-queued,
+   then within 2 minutes the proposal card appears in Slack.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+---
+
+## What This Fixes Permanently
+
+```
+Before:
+  529 error → task dies → you manually curl /retrigger
+  
+After:
+  529 error → auto-retries 3x (5s, 10s, 20s gaps)
+            → if still failing → Slack card with 🔄 Retry button
+            → one click re-queues, no terminal needed ever
+```
+
+The Busy Bees proposal will fire automatically once the task is re-queued. Come back with the build output and we'll confirm it's working.
