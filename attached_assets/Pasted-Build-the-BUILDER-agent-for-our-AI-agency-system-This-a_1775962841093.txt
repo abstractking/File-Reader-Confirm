@@ -1,0 +1,544 @@
+Build the BUILDER agent for our AI agency system.
+This agent generates complete React + TypeScript + Tailwind 
+websites for local service businesses.
+
+Create these files:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FILE 1: agents/builder/config.ts
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+export const BUILDER_CONFIG = {
+  tech_stack: "React + TypeScript + Tailwind CSS",
+  
+  // Page sets per structure type
+  structures: {
+    single: ["Landing Page (all sections on one page)"],
+    multi: ["Home", "About", "Services", "Contact"],
+    multi_with_booking: ["Home", "About", "Services", "Booking", "Contact"],
+    multi_full: ["Home", "About", "Services", "Gallery", "Booking", "Blog", "Contact"],
+  },
+
+  // Sections available to include per page
+  sections: [
+    "Hero",
+    "Services",
+    "About",
+    "Testimonials", 
+    "Gallery",
+    "Booking/CTA",
+    "FAQ",
+    "Contact",
+    "Footer",
+  ],
+
+  // Niche → default color palettes
+  niche_palettes: {
+    "nail salon":        { primary: "#E8B4B8", secondary: "#F9F0F1", accent: "#C17B82", text: "#2D2D2D" },
+    "restaurant":        { primary: "#2C1810", secondary: "#F5E6D3", accent: "#C9956C", text: "#1A1A1A" },
+    "plumber":           { primary: "#1B4F8A", secondary: "#EBF2FB", accent: "#F5A623", text: "#1A1A1A" },
+    "cleaning service":  { primary: "#2E86AB", secondary: "#F0F8FF", accent: "#48CAE4", text: "#1A1A1A" },
+    "lawn care":         { primary: "#2D6A4F", secondary: "#F0F7F4", accent: "#74C69D", text: "#1A1A1A" },
+    "handyman":          { primary: "#E85D04", secondary: "#FFF3E0", accent: "#FAA307", text: "#1A1A1A" },
+    "dog walker":        { primary: "#6B4226", secondary: "#FDF6EC", accent: "#F4A261", text: "#1A1A1A" },
+    "hair salon":        { primary: "#4A1942", secondary: "#FDF0FF", accent: "#C77DFF", text: "#1A1A1A" },
+    "electrician":       { primary: "#1A1A2E", secondary: "#F0F4FF", accent: "#F5C518", text: "#1A1A1A" },
+    "default":           { primary: "#1B4F8A", secondary: "#F0F4FF", accent: "#F5A623", text: "#1A1A1A" },
+  },
+};
+
+export type SiteStructure = "single" | "multi" | "multi_with_booking" | "multi_full";
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FILE 2: agents/builder/index.ts
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+import { Task, AgentRunResult }  from "../../core/types";
+import { log }                   from "../../core/logger";
+import { askClaude }             from "../../core/claude";
+import { insertAsset }           from "../../core/queries";
+import { BUILDER_CONFIG, SiteStructure } from "./config";
+
+export async function run(task: Task): Promise<AgentRunResult> {
+  const project  = task.input_data?.project;
+  const wireframe = task.input_data?.previous_output;
+
+  if (!project) throw new Error("BUILDER: no project in task input_data");
+
+  await log("BUILDER", "run_started", { project_id: project.id, client: project.client_name }, "success", project.id);
+
+  // Determine site structure from package
+  const structure: SiteStructure =
+    project.package === "starter" ? "single" :
+    project.package === "growth"  ? "multi_with_booking" :
+    "multi_full";
+
+  const pages = BUILDER_CONFIG.structures[structure];
+  
+  // Get niche color palette
+  const nicheKey = Object.keys(BUILDER_CONFIG.niche_palettes)
+    .find(k => project.niche?.toLowerCase().includes(k)) ?? "default";
+  const palette = BUILDER_CONFIG.niche_palettes[nicheKey as keyof typeof BUILDER_CONFIG.niche_palettes] 
+    ?? BUILDER_CONFIG.niche_palettes.default;
+
+  // Generate each page/component with Claude
+  const generatedFiles: Record<string, string> = {};
+
+  // 1. Generate main App.tsx
+  generatedFiles["App.tsx"] = await generateAppFile(project, pages, palette, wireframe);
+
+  // 2. Generate tailwind config
+  generatedFiles["tailwind.config.ts"] = generateTailwindConfig(palette);
+
+  // 3. Generate each page component
+  for (const page of pages) {
+    const componentName = page.replace(/[^a-zA-Z]/g, "");
+    const fileName = `src/pages/${componentName}.tsx`;
+    generatedFiles[fileName] = await generatePageComponent(
+      project, page, palette, wireframe, structure
+    );
+    // Small delay between Claude calls
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  // 4. Generate shared components
+  const sharedComponents = ["Navbar", "Footer", "ContactForm", "HeroSection"];
+  for (const component of sharedComponents) {
+    const fileName = `src/components/${component}.tsx`;
+    generatedFiles[fileName] = await generateSharedComponent(
+      project, component, palette
+    );
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  // 5. Generate package.json for the client site
+  generatedFiles["package.json"] = generatePackageJson(project);
+
+  // 6. Generate README with setup instructions
+  generatedFiles["README.md"] = generateReadme(project, structure, pages);
+
+  // Save all generated files as an asset
+  await insertAsset({
+    project_id:  project.id,
+    task_id:     task.id,
+    asset_type:  "site_code",
+    title:       `${project.project_name} — Full Site Code`,
+    content:     JSON.stringify(generatedFiles, null, 2),
+    file_url:    null,
+    version:     1,
+    is_approved: false,
+    metadata: {
+      structure,
+      pages,
+      palette,
+      file_count: Object.keys(generatedFiles).length,
+      tech_stack: BUILDER_CONFIG.tech_stack,
+    }
+  });
+
+  await log(
+    "BUILDER", "site_generated",
+    { files: Object.keys(generatedFiles).length, structure, pages: pages.length },
+    "success", project.id
+  );
+
+  return {
+    summary: `Generated ${Object.keys(generatedFiles).length} files for ${project.client_name} — ${structure} site with ${pages.length} pages`,
+    data: {
+      structure,
+      pages,
+      palette,
+      files: Object.keys(generatedFiles),
+      file_count: Object.keys(generatedFiles).length,
+      tech_stack: BUILDER_CONFIG.tech_stack,
+      // Include the actual code for Slack preview
+      preview: {
+        "App.tsx": generatedFiles["App.tsx"]?.slice(0, 500) + "...",
+      }
+    },
+    metadata: { palette, structure }
+  };
+}
+
+async function generateAppFile(
+  project: any,
+  pages: string[],
+  palette: any,
+  wireframe: any
+): Promise<string> {
+  return askClaude({
+    system: `You are an expert React + TypeScript + Tailwind CSS developer. 
+             Generate clean, production-ready code only. 
+             No explanations, no markdown — just the raw file content.
+             Use Tailwind CSS classes exclusively for styling.
+             Make sites feel warm, professional, and conversion-focused.`,
+    messages: [{
+      role: "user",
+      content: `Generate a complete App.tsx for a ${project.niche} business website.
+
+Business: ${project.client_name}
+Location: ${project.metadata?.address ?? project.metadata?.location ?? "local area"}
+Phone: ${project.metadata?.phone ?? ""}
+Package: ${project.package}
+Pages: ${pages.join(", ")}
+Primary color: ${palette.primary}
+Accent color: ${palette.accent}
+Background: ${palette.secondary}
+
+Wireframe context: ${wireframe ? JSON.stringify(wireframe).slice(0, 500) : "not provided"}
+
+Requirements:
+- React Router for navigation between pages
+- Import all page components from ./pages/
+- Import Navbar from ./components/Navbar
+- Import Footer from ./components/Footer  
+- Mobile responsive
+- Clean TypeScript with proper types
+- Tailwind CSS only — no inline styles
+- Include a simple color theme using CSS variables in index.css
+
+Generate ONLY the App.tsx file content, starting with imports.`
+    }],
+    maxTokens: 2000,
+  });
+}
+
+async function generatePageComponent(
+  project: any,
+  page: string,
+  palette: any,
+  wireframe: any,
+  structure: string
+): Promise<string> {
+  return askClaude({
+    system: `You are an expert React + TypeScript + Tailwind CSS developer.
+             Generate production-ready React components.
+             No explanations — just the raw TSX file content.
+             Make sites feel warm, trustworthy, and conversion-focused for local businesses.
+             Include real placeholder content specific to the business niche.`,
+    messages: [{
+      role: "user", 
+      content: `Generate a complete ${page} page component for:
+
+Business: ${project.client_name}
+Niche: ${project.niche}
+Location: ${project.metadata?.address ?? "local area"}  
+Phone: ${project.metadata?.phone ?? "(337) 555-0100"}
+Package: ${project.package} — ${structure} structure
+Primary color: ${palette.primary}
+Accent color: ${palette.accent}
+Secondary/bg: ${palette.secondary}
+Text color: ${palette.text}
+
+Page to generate: ${page}
+
+Requirements:
+- Full TypeScript React component with proper export default
+- Tailwind CSS only
+- Mobile-first responsive design
+- Include realistic content for a ${project.niche} business
+- Hero section (if Home page): big headline, subheadline, CTA button with phone number
+- Services section: list 4-6 realistic services for this niche
+- Contact section: phone, address, contact form
+- Booking section (if applicable): simple booking CTA with phone/form
+- Testimonials: 3 realistic reviews from local customers
+- All CTAs should reference the business phone number
+
+Generate ONLY the TSX component code starting with imports.`
+    }],
+    maxTokens: 2500,
+  });
+}
+
+async function generateSharedComponent(
+  project: any,
+  component: string,
+  palette: any
+): Promise<string> {
+  return askClaude({
+    system: `You are an expert React + TypeScript + Tailwind developer.
+             Generate clean shared components. No explanations, just code.`,
+    messages: [{
+      role: "user",
+      content: `Generate the ${component} shared component for:
+
+Business: ${project.client_name}
+Niche: ${project.niche}
+Phone: ${project.metadata?.phone ?? "(337) 555-0100"}
+Primary color: ${palette.primary}
+Accent color: ${palette.accent}
+Background: ${palette.secondary}
+
+Component: ${component}
+
+Specific requirements per component:
+- Navbar: logo/business name left, nav links right, mobile hamburger menu, phone number CTA button
+- Footer: business name, tagline, quick links, phone, address, copyright
+- ContactForm: name/email/phone/message fields, submit button, TypeScript form handling with useState
+- HeroSection: reusable hero with headline prop, subheadline prop, CTA text prop
+
+Generate ONLY the TSX code starting with imports.`
+    }],
+    maxTokens: 1500,
+  });
+}
+
+function generateTailwindConfig(palette: any): string {
+  return `import type { Config } from 'tailwindcss'
+
+const config: Config = {
+  content: [
+    './index.html',
+    './src/**/*.{js,ts,jsx,tsx}',
+  ],
+  theme: {
+    extend: {
+      colors: {
+        primary:   '${palette.primary}',
+        secondary: '${palette.secondary}',
+        accent:    '${palette.accent}',
+        brand: {
+          text: '${palette.text}',
+        }
+      },
+      fontFamily: {
+        sans: ['Inter', 'system-ui', 'sans-serif'],
+      },
+    },
+  },
+  plugins: [],
+}
+
+export default config`;
+}
+
+function generatePackageJson(project: any): string {
+  const slug = project.client_name
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "-")
+    .replace(/-+/g, "-");
+
+  return JSON.stringify({
+    name: slug,
+    version: "1.0.0",
+    private: true,
+    scripts: {
+      dev:     "vite",
+      build:   "tsc && vite build",
+      preview: "vite preview",
+    },
+    dependencies: {
+      "react":            "^18.2.0",
+      "react-dom":        "^18.2.0",
+      "react-router-dom": "^6.22.0",
+    },
+    devDependencies: {
+      "@types/react":            "^18.2.0",
+      "@types/react-dom":        "^18.2.0",
+      "@vitejs/plugin-react":    "^4.2.0",
+      "autoprefixer":            "^10.4.17",
+      "postcss":                 "^8.4.35",
+      "tailwindcss":             "^3.4.1",
+      "typescript":              "^5.3.3",
+      "vite":                    "^5.1.0",
+    }
+  }, null, 2);
+}
+
+function generateReadme(project: any, structure: string, pages: string[]): string {
+  return `# ${project.project_name}
+
+Generated by AI Agency BUILDER agent.
+
+## Stack
+- React 18 + TypeScript
+- Tailwind CSS
+- Vite
+- React Router v6
+
+## Pages
+${pages.map(p => `- ${p}`).join("\n")}
+
+## Structure
+${structure}
+
+## Setup
+\`\`\`bash
+npm install
+npm run dev
+\`\`\`
+
+## Build for production
+\`\`\`bash
+npm run build
+\`\`\`
+
+## Deploy
+Upload the \`dist/\` folder to any static host:
+- Netlify (drag and drop)
+- Vercel
+- Cloudflare Pages
+
+## Client Details
+- Business: ${project.client_name}
+- Niche: ${project.niche}
+- Package: ${project.package}
+`;
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+FILE 3: agents/builder/slack.ts
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+import { WebClient }  from "@slack/web-api";
+import { Asset }      from "../../core/types";
+import { log }        from "../../core/logger";
+
+const slack   = new WebClient(process.env.SLACK_BOT_TOKEN!);
+const CHANNEL = process.env.SLACK_CHANNEL_ID!;
+
+export async function sendBuilderCard(
+  asset:      Asset,
+  project:    any,
+  approvalId: string,
+  taskId:     string
+): Promise<string | undefined> {
+  const metadata = asset.metadata as any;
+  const files    = metadata?.files ?? [];
+  const fileList = files.slice(0, 10).map((f: string) => `• \`${f}\``).join("\n");
+
+  const msg = await slack.chat.postMessage({
+    channel: CHANNEL,
+    text:    `⚙️ Site code ready for review — ${project.client_name}`,
+    blocks: [
+      {
+        type: "header",
+        text: { type: "plain_text", text: `⚙️ BUILDER — Site Ready for Review` }
+      },
+      {
+        type: "section",
+        fields: [
+          { type: "mrkdwn", text: `*Client:*\n${project.client_name}`              },
+          { type: "mrkdwn", text: `*Package:*\n${project.package}`                  },
+          { type: "mrkdwn", text: `*Structure:*\n${metadata?.structure ?? "—"}`     },
+          { type: "mrkdwn", text: `*Pages:*\n${metadata?.pages?.join(", ") ?? "—"}` },
+          { type: "mrkdwn", text: `*Files:*\n${metadata?.file_count ?? 0} files`    },
+          { type: "mrkdwn", text: `*Stack:*\n${metadata?.tech_stack ?? "React/TS/Tailwind"}` },
+        ]
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*Generated Files:*\n${fileList}${files.length > 10 ? `\n• ...and ${files.length - 10} more` : ""}`
+        }
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*Color Palette:*\nPrimary: \`${metadata?.palette?.primary}\` | Accent: \`${metadata?.palette?.accent}\` | BG: \`${metadata?.palette?.secondary}\``
+        }
+      },
+      { type: "divider" },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*How to review:*\n✅ *Approve* → code saved, ready to deploy\n❌ *Reject* → mark for revision`
+        }
+      },
+      {
+        type: "actions",
+        block_id: `builder::${approvalId}`,
+        elements: [
+          {
+            type:      "button",
+            text:      { type: "plain_text", text: "✅  Approve Code" },
+            style:     "primary",
+            action_id: "producer_approve",
+            value:     approvalId,
+            confirm: {
+              title:   { type: "plain_text", text: "Approve this site code?" },
+              text:    { type: "mrkdwn",     text: "This will save the code and advance to the MARKET stage." },
+              confirm: { type: "plain_text", text: "Yes, approve" },
+              deny:    { type: "plain_text", text: "Cancel" },
+            }
+          },
+          {
+            type:      "button",
+            text:      { type: "plain_text", text: "❌  Reject" },
+            style:     "danger",
+            action_id: "producer_reject",
+            value:     approvalId,
+          }
+        ]
+      },
+      {
+        type: "context",
+        elements: [
+          { type: "mrkdwn", text: `Approval \`${approvalId}\` • Task \`${taskId}\` • BUILDER agent` }
+        ]
+      }
+    ]
+  });
+
+  return msg.ts ?? undefined;
+}
+
+export async function postApprovedCode(
+  asset:   Asset,
+  project: any
+): Promise<void> {
+  const content  = asset.content ?? "{}";
+  const files    = JSON.parse(content) as Record<string, string>;
+  const fileKeys = Object.keys(files);
+
+  await slack.chat.postMessage({
+    channel: CHANNEL,
+    text:    `✅ Site code approved — ${project.client_name}`,
+    blocks: [
+      {
+        type: "header",
+        text: { type: "plain_text", text: `✅ Code Approved — ${project.client_name}` }
+      },
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `${fileKeys.length} files generated. Copy each file from the messages below into your project.`
+        }
+      }
+    ]
+  });
+
+  // Post each file as a separate message for easy copying
+  for (const [filename, code] of Object.entries(files)) {
+    const chunks = code.match(/.{1,3800}/gs) ?? [code];
+    await slack.chat.postMessage({
+      channel: CHANNEL,
+      text:    `📄 \`${filename}\`\n\`\`\`\n${chunks[0]}\n\`\`\``,
+    });
+    await new Promise(r => setTimeout(r, 400));
+  }
+
+  await slack.chat.postMessage({
+    channel: CHANNEL,
+    text:    `_— End of code for ${project.client_name}. Deploy the dist/ folder when ready._`,
+  });
+
+  await log("BUILDER", "code_posted_to_slack", { client: project.client_name, files: fileKeys.length }, "success", project.id);
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+After creating all 3 files, confirm by running:
+  ls agents/builder/
+  
+It should show: config.ts  index.ts  slack.ts
+
+Then restart the server:
+  pkill -f tsx || true
+  pnpm run start
+
+Show me the startup output confirming PRODUCER is online.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
