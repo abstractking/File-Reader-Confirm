@@ -90,8 +90,29 @@ async function processTask(task: Task): Promise<void> {
       requested_by:     "PRODUCER",
     });
 
-    // ── Send to Slack ──
-    const ts = await sendApprovalCard(task, result, approval.id);
+    // ── Send to Slack — use agent-specific card when available ──
+    let ts: string | undefined;
+    if (task.task_type === "generate_site_code") {
+      const { sendBuilderCard } = await import("../builder/slack");
+      // Construct a pseudo-Asset from the AgentRunResult so sendBuilderCard
+      // gets the file list, palette, structure etc it needs for the card.
+      const pseudoAsset = {
+        id:          approval.id,
+        created_at:  new Date(),
+        project_id:  task.project_id,
+        task_id:     task.id,
+        asset_type:  "site_code",
+        title:       result.summary ?? "Site Code",
+        content:     null,
+        file_url:    null,
+        version:     1,
+        is_approved: false,
+        metadata:    result.data ?? {},
+      };
+      ts = await sendBuilderCard(pseudoAsset, task.project!, approval.id, task.id);
+    } else {
+      ts = await sendApprovalCard(task, result, approval.id);
+    }
     if (ts) await updateApprovalSlackTs(approval.id, ts, SLACK_CHANNEL);
 
     await log("PRODUCER", "approval_requested", { approval_id: approval.id, agent: task.agent }, "success", task.project_id);
@@ -412,6 +433,12 @@ app.post("/webhooks/slack", async (req, res) => {
           const project = typeof rawTask.project === "string" ? JSON.parse(rawTask.project) : rawTask.project;
           const output  = typeof rawTask.output_data === "string" ? JSON.parse(rawTask.output_data) : rawTask.output_data;
           await onApproved({ ...rawTask, output_data: output }, project);
+        }
+
+        if (rawTask?.task_type === "generate_site_code") {
+          const { onApproved: builderOnApproved } = await import("../builder/index");
+          const project = typeof rawTask.project === "string" ? JSON.parse(rawTask.project) : rawTask.project;
+          await builderOnApproved(rawTask.id, project);
         }
       } catch (err: any) {
         console.error("[PRODUCER] Post-approval hook error:", err.message);

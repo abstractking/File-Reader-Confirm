@@ -237,6 +237,19 @@ export async function getAssetsByProject(projectId: string): Promise<Asset[]> {
   );
 }
 
+export async function getAssetByTaskId(taskId: string, assetType?: string): Promise<Asset | null> {
+  if (assetType) {
+    return queryOne<Asset>(
+      "SELECT * FROM assets WHERE task_id = $1 AND asset_type = $2 ORDER BY version DESC LIMIT 1",
+      [taskId, assetType]
+    );
+  }
+  return queryOne<Asset>(
+    "SELECT * FROM assets WHERE task_id = $1 ORDER BY version DESC LIMIT 1",
+    [taskId]
+  );
+}
+
 // ══════════════════════════════════════════════
 // AUDIT LOGS
 // ══════════════════════════════════════════════
