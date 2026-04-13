@@ -238,7 +238,7 @@ Section requirements:
 
 Generate ONLY the TSX component starting with imports. Export default at the end.`
     }],
-    maxTokens: 2500,
+    maxTokens: 4096,
   });
 }
 

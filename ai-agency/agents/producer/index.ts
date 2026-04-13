@@ -557,6 +557,12 @@ app.post("/retrigger", async (req, res) => {
 // Body: { website_url, niche, location, business_name?, phone?, email?, notes? }
 // Bypasses processTask — SCOUT manages its own Slack card
 app.post("/scout/submit", async (req, res) => {
+  const token = req.headers["x-api-key"];
+  if (process.env.SUBMIT_API_KEY && token !== process.env.SUBMIT_API_KEY) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
   const {
     website_url, niche, location,
     business_name, phone, email, notes,
@@ -691,6 +697,17 @@ cron.schedule(POLL_INTERVAL, async () => {
 // ═════════════════════════════════════════════
 async function start() {
   // Verify DB connection before starting
+  const REQUIRED_ENV = [
+    "DATABASE_URL", "ANTHROPIC_API_KEY",
+    "SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET", "SLACK_CHANNEL_ID",
+  ];
+  for (const key of REQUIRED_ENV) {
+    if (!process.env[key]) {
+      console.error(`❌ Missing required env var: ${key}`);
+      process.exit(1);
+    }
+  }
+
   const dbOk = await dbPing();
   if (!dbOk) {
     console.error("❌ Cannot connect to Replit PostgreSQL. Check DATABASE_URL in Secrets.");
