@@ -2,10 +2,11 @@
 // ═════════════════════════════════════════════
 //  BUILDER Slack Cards
 //  sendBuilderCard  — rich approval card with file list, palette, Approve/Reject
-//  postApprovedCode — dumps every generated file as copyable Slack messages
+//  postApprovedCode — zips all generated files and uploads as a single Slack file
 // ═════════════════════════════════════════════
 
 import { WebClient } from "@slack/web-api";
+import JSZip         from "jszip";
 import { Asset }     from "../../core/types";
 import { log }       from "../../core/logger";
 
@@ -67,7 +68,7 @@ export async function sendBuilderCard(
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*How to review:*\n✅ *Approve* → all files posted to Slack for copying, project advances to LAUNCH\n❌ *Reject* → mark for revision`
+          text: `*How to review:*\n✅ *Approve* → site zip posted to Slack, project advances to LAUNCH\n❌ *Reject* → mark for revision`
         }
       },
       {
@@ -82,7 +83,7 @@ export async function sendBuilderCard(
             value:     approvalId,
             confirm: {
               title:   { type: "plain_text", text: "Approve this site code?" },
-              text:    { type: "mrkdwn",     text: "All generated files will be posted to Slack and the project advances to LAUNCH." },
+              text:    { type: "mrkdwn",     text: "A zip of all generated files will be posted to Slack and the project advances to LAUNCH." },
               confirm: { type: "plain_text", text: "Yes, approve" },
               deny:    { type: "plain_text", text: "Cancel" },
             }
@@ -109,13 +110,13 @@ export async function sendBuilderCard(
 }
 
 // ─────────────────────────────────────────────
-// Post-approval: dump every file to Slack
+// Post-approval: zip all files and upload as one Slack file
 // ─────────────────────────────────────────────
 export async function postApprovedCode(
   asset:   Asset,
   project: any
 ): Promise<void> {
-  const raw   = asset.content ?? "{}";
+  const raw = asset.content ?? "{}";
   let files: Record<string, string>;
   try {
     files = JSON.parse(raw);
@@ -125,66 +126,46 @@ export async function postApprovedCode(
 
   const fileKeys = Object.keys(files);
 
-  await slack.chat.postMessage({
-    channel: CHANNEL,
-    text:    `✅ Site code approved — ${project.client_name}`,
-    blocks: [
-      {
-        type: "header",
-        text: { type: "plain_text", text: `✅ Code Approved — ${project.client_name}` }
-      },
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `*${fileKeys.length} files generated.*\nEach file is posted below as a separate message for easy copying.\n\nTo run locally:\n\`\`\`npm install\nnpm run dev\`\`\``
-        }
-      }
-    ]
-  });
+  // ── Build zip in memory ──────────────────────
+  const zip = new JSZip();
+  const slug = (project.client_name as string)
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
 
-  await sleep(400);
-
+  const folder = zip.folder(slug)!;
   for (const [filename, code] of Object.entries(files)) {
-    const chunks = chunkText(code, 3800);
-
-    await slack.chat.postMessage({
-      channel: CHANNEL,
-      text:    `📄 \`${filename}\`\n\`\`\`\n${chunks[0]}\n\`\`\``,
-    });
-
-    for (let i = 1; i < chunks.length; i++) {
-      await sleep(300);
-      await slack.chat.postMessage({
-        channel: CHANNEL,
-        text:    `📄 \`${filename}\` (continued)\n\`\`\`\n${chunks[i]}\n\`\`\``,
-      });
-    }
-
-    await sleep(350);
+    folder.file(filename, code);
   }
 
-  await slack.chat.postMessage({
-    channel: CHANNEL,
-    text:    `_— End of site code for *${project.client_name}*. Deploy the \`dist/\` folder when ready._`,
+  const zipBuffer = await zip.generateAsync({
+    type:               "nodebuffer",
+    compression:        "DEFLATE",
+    compressionOptions: { level: 6 },
   });
 
-  await log("BUILDER", "code_posted_to_slack", { client: project.client_name, files: fileKeys.length }, "success", project.id);
+  const zipFilename = `${slug}-site.zip`;
+
+  // ── Upload to Slack ──────────────────────────
+  await (slack as any).filesUploadV2({
+    channel_id:      CHANNEL,
+    filename:        zipFilename,
+    file:            zipBuffer,
+    initial_comment: `✅ *${project.client_name}* — site code ready!\n📦 \`${zipFilename}\` · ${fileKeys.length} files · React + TypeScript + Tailwind\n\nTo run:\n\`\`\`\nnpm install\nnpm run dev\n\`\`\``,
+  });
+
+  await log(
+    "BUILDER", "zip_posted_to_slack",
+    { client: project.client_name, files: fileKeys.length, zip: zipFilename },
+    "success", project.id
+  );
 }
 
 // ─────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────
-function chunkText(text: string, maxLen: number): string[] {
-  const chunks: string[] = [];
-  let start = 0;
-  while (start < text.length) {
-    chunks.push(text.slice(start, start + maxLen));
-    start += maxLen;
-  }
-  return chunks;
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
+void sleep; // suppress unused warning
