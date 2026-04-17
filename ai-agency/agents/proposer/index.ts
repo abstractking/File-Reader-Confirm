@@ -72,7 +72,7 @@ export async function run(task: Task): Promise<AgentRunResult> {
   );
 
   return {
-    summary:  `Proposal drafted for ${project.client_name} — ${proposal.package_name} package at $${proposal.price.toLocaleString()}`,
+    summary:  `Proposal drafted for ${project.client_name} — ${proposal.package_name} package at $${(proposal.price ?? 0).toLocaleString()}`,
     data: {
       subject_line:  proposal.subject_line,
       proposal_text: proposal.proposal_text,

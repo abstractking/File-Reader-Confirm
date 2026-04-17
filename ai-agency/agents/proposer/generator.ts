@@ -73,7 +73,7 @@ ${analysis}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
 RECOMMENDED PACKAGE: ${pkg.name.toUpperCase()}
 ━━━━━━━━━━━━━━━━━━━━━━━━━
-Price: $${pkg.price.toLocaleString()}
+Price: $${(pkg.price ?? 0).toLocaleString()}
 Timeline: ${pkg.timeline}
 Tagline: ${pkg.tagline}
 Ideal for: ${pkg.idealFor}
@@ -115,7 +115,7 @@ Write the proposal in this exact order:
    Make it feel exciting and tangible, not like a boring spec sheet.
 
 5. YOUR INVESTMENT
-   State the price clearly: $${pkg.price.toLocaleString()} — one clear project fee.
+   State the price clearly: $${(pkg.price ?? 0).toLocaleString()} — one clear project fee.
    Mention the timeline: ${pkg.timeline}.
    Optional: mention a payment structure (50% upfront, 50% on launch).
 

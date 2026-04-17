@@ -48,7 +48,7 @@ export async function sendProposalCard(
         fields: [
           { type: "mrkdwn", text: `*Business:*\n${project.client_name}`          },
           { type: "mrkdwn", text: `*Package:*\n${proposal.package_name}`          },
-          { type: "mrkdwn", text: `*Price:*\n$${proposal.price.toLocaleString()}` },
+          { type: "mrkdwn", text: `*Price:*\n$${(proposal.price ?? 0).toLocaleString()}` },
           { type: "mrkdwn", text: `*Timeline:*\n${proposal.timeline}`             },
           { type: "mrkdwn", text: `*Niche:*\n${project.niche}`                    },
           { type: "mrkdwn", text: `*Words:*\n${proposal.word_count}`              },
@@ -155,7 +155,7 @@ export async function postApprovedProposal(
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `*Copy this proposal and email it to the client.*\n_Package: ${proposal.package_name} · $${proposal.price.toLocaleString()} · ${proposal.timeline}_`
+          text: `*Copy this proposal and email it to the client.*\n_Package: ${proposal.package_name} · $${(proposal.price ?? 0).toLocaleString()} · ${proposal.timeline}_`
         }
       },
     ]

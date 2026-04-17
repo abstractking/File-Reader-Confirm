@@ -213,7 +213,7 @@ Return JSON:
   ]
 }`,
     }],
-    maxTokens: 4000,
+    maxTokens: 8000,
   });
 
   return result.pages ?? [];
