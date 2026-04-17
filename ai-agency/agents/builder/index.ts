@@ -61,13 +61,13 @@ export async function run(task: Task): Promise<AgentRunResult> {
 
   // 1. src/App.tsx — lives in src/ so relative imports work correctly
   generatedFiles["src/App.tsx"] = await generateAppFile(project, pages, palette, wireframe, structure);
-  await delay(400);
+  await delay(2000);
 
   // 2. Per-page components under src/pages/
   for (const page of pages) {
     const fileName = `src/pages/${page}.tsx`;
     generatedFiles[fileName] = await generatePageComponent(project, page, palette, wireframe, structure);
-    await delay(400);
+    await delay(2000);
   }
 
   // 3. Shared components under src/components/
@@ -75,7 +75,7 @@ export async function run(task: Task): Promise<AgentRunResult> {
   for (const component of sharedComponents) {
     const fileName = `src/components/${component}.tsx`;
     generatedFiles[fileName] = await generateSharedComponent(project, component, palette);
-    await delay(400);
+    await delay(2000);
   }
 
   const fileList = Object.keys(generatedFiles);
