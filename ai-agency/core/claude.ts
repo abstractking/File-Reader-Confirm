@@ -20,22 +20,12 @@ export interface AskClaudeOptions {
   model?:      string;
 }
 
-const MAX_RETRIES    = 3;
-const BASE_DELAY_MS  = 5000; // 5s → 10s → 20s (doubles each attempt)
-
-function isRetryableError(err: any): boolean {
-  const status = err?.status ?? err?.statusCode ?? err?.response?.status;
-  if (typeof status === "number" && status >= 500) return true;
-  if (err?.error?.type === "overloaded_error")     return true;
-  if (err?.message?.includes("overloaded"))        return true;
-  if (err?.message?.includes("529"))               return true;
-  return false;
-}
+const RETRY_DELAYS = [5000, 10000, 20000]; // 5s, 10s, 20s
 
 export async function askClaude(opts: AskClaudeOptions): Promise<string> {
   let lastError: any;
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+  for (let attempt = 0; attempt <= RETRY_DELAYS.length; attempt++) {
     try {
       const response = await client.messages.create({
         model:      opts.model ?? "claude-sonnet-4-5",
@@ -51,14 +41,19 @@ export async function askClaude(opts: AskClaudeOptions): Promise<string> {
     } catch (err: any) {
       lastError = err;
 
-      if (!isRetryableError(err) || attempt === MAX_RETRIES) {
+      const is529 =
+        err?.status === 529 ||
+        err?.error?.type === "overloaded_error" ||
+        err?.message?.includes("overloaded") ||
+        err?.message?.includes("529");
+
+      if (!is529 || attempt === RETRY_DELAYS.length) {
         throw err;
       }
 
-      const delayMs = BASE_DELAY_MS * Math.pow(2, attempt); // 5s, 10s, 20s
-      const status  = err?.status ?? err?.statusCode ?? "5xx";
-      console.log(`[Claude] Error ${status} — retry ${attempt + 1}/${MAX_RETRIES} in ${delayMs / 1000}s...`);
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+      const delay = RETRY_DELAYS[attempt];
+      console.log(`[Claude] Overloaded (529) — retry ${attempt + 1}/3 in ${delay / 1000}s...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
 
