@@ -508,6 +508,13 @@ app.post("/webhooks/slack", async (req, res) => {
           [approvalId]
         );
         const rawTask = taskRows[0] as any;
+
+        await log("PRODUCER", "post_approval_hook", {
+          approvalId,
+          task_type: rawTask?.task_type ?? "NOT_FOUND",
+          task_id:   rawTask?.id ?? "none",
+        }, "success");
+
         if (rawTask?.task_type === "generate_proposal") {
           const { onApproved } = await import("../proposer/index");
           const project = typeof rawTask.project === "string" ? JSON.parse(rawTask.project) : rawTask.project;
@@ -518,10 +525,12 @@ app.post("/webhooks/slack", async (req, res) => {
         if (rawTask?.task_type === "generate_site_code") {
           const { onApproved: builderOnApproved } = await import("../builder/index");
           const project = typeof rawTask.project === "string" ? JSON.parse(rawTask.project) : rawTask.project;
+          await log("PRODUCER", "zip_upload_starting", { task_id: rawTask.id, client: project.client_name }, "success");
           await builderOnApproved(rawTask.id, project);
         }
       } catch (err: any) {
         console.error("[PRODUCER] Post-approval hook error:", err.message);
+        await log("PRODUCER", "post_approval_hook_error", { error: err.message, approvalId }, "error");
       }
     }
 

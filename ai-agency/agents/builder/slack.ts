@@ -122,9 +122,17 @@ export async function postApprovedCode(
     files = JSON.parse(raw);
   } catch {
     files = {};
+    await log("BUILDER", "zip_parse_error", { assetId: asset.id }, "error", project.id);
   }
 
   const fileKeys = Object.keys(files);
+
+  await log("BUILDER", "zip_build_start", {
+    client:   project.client_name,
+    files:    fileKeys.length,
+    channel:  CHANNEL ? CHANNEL.slice(0, 6) + "…" : "MISSING",
+    hasToken: !!process.env.SLACK_BOT_TOKEN,
+  }, "success", project.id);
 
   // ── Build zip in memory ──────────────────────
   const zip = new JSZip();
@@ -147,13 +155,27 @@ export async function postApprovedCode(
 
   const zipFilename = `${slug}-site.zip`;
 
+  await log("BUILDER", "zip_uploading", {
+    zip:   zipFilename,
+    bytes: zipBuffer.length,
+  }, "success", project.id);
+
   // ── Upload to Slack ──────────────────────────
-  await (slack as any).filesUploadV2({
-    channel_id:      CHANNEL,
-    filename:        zipFilename,
-    file:            zipBuffer,
-    initial_comment: `✅ *${project.client_name}* — site code ready!\n📦 \`${zipFilename}\` · ${fileKeys.length} files · React + TypeScript + Tailwind\n\nTo run:\n\`\`\`\nnpm install\nnpm run dev\n\`\`\``,
-  });
+  try {
+    await (slack as any).filesUploadV2({
+      channel_id:      CHANNEL,
+      filename:        zipFilename,
+      file:            zipBuffer,
+      initial_comment: `✅ *${project.client_name}* — site code ready!\n📦 \`${zipFilename}\` · ${fileKeys.length} files · React + TypeScript + Tailwind\n\nTo run:\n\`\`\`\nnpm install\nnpm run dev\n\`\`\``,
+    });
+  } catch (uploadErr: any) {
+    await log("BUILDER", "zip_upload_error", {
+      error: uploadErr.message,
+      code:  uploadErr.code ?? "unknown",
+      data:  JSON.stringify(uploadErr.data ?? {}).slice(0, 200),
+    }, "error", project.id);
+    throw uploadErr;
+  }
 
   await log(
     "BUILDER", "zip_posted_to_slack",
