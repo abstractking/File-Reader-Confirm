@@ -1,7 +1,7 @@
 // agents/scout/config.ts
 // ═════════════════════════════════════════════
 //  SCOUT Configuration
-//  Edit TARGET_LOCATIONS and NICHES to aim
+//  Edit TARGET_LOCATIONS and TARGET_NICHES to aim
 //  SCOUT at your chosen markets
 // ═════════════════════════════════════════════
 
@@ -35,80 +35,71 @@ export const TARGET_LOCATIONS: string[] = [
 // These map directly to Google Maps search queries.
 // Adjust minScore to filter how aggressively.
 // ─────────────────────────────────────────────
-export const NICHES: NicheConfig[] = [
-  {
-    keyword:  "nail salon",
-    label:    "Nail Salon",
-    minScore: 40,
-    signals:  { noWebsite: true, lowRatings: false, fewReviews: true },
-  },
-  {
-    keyword:  "restaurant",
-    label:    "Restaurant",
-    minScore: 45,
-    signals:  { noWebsite: true, lowRatings: false, fewReviews: true },
-  },
+export const TARGET_NICHES: NicheConfig[] = [
   {
     keyword:  "plumber",
-    label:    "Plumber",
-    minScore: 40,
-    signals:  { noWebsite: true, lowRatings: false, fewReviews: true },
-  },
-  {
-    keyword:  "cleaning service",
-    label:    "Cleaning Service",
-    minScore: 35,
-    signals:  { noWebsite: true, lowRatings: false, fewReviews: true },
-  },
-  {
-    keyword:  "lawn care service",
-    label:    "Lawn Care",
-    minScore: 35,
-    signals:  { noWebsite: true, lowRatings: false, fewReviews: true },
-  },
-  {
-    keyword:  "handyman service",
-    label:    "Handyman",
-    minScore: 35,
-    signals:  { noWebsite: true, lowRatings: false, fewReviews: true },
-  },
-  {
-    keyword:  "dog walker",
-    label:    "Dog Walker",
-    minScore: 30,
-    signals:  { noWebsite: true, lowRatings: false, fewReviews: true },
-  },
-  {
-    keyword:  "hair salon",
-    label:    "Hair Salon",
-    minScore: 40,
-    signals:  { noWebsite: true, lowRatings: false, fewReviews: true },
+    label:    "Plumbing Services",
+    minScore: 45,
+    signals: {
+      noWebsite:   true,
+      lowRatings:  false,
+      fewReviews:  true,
+    },
   },
   {
     keyword:  "electrician",
-    label:    "Electrician",
-    minScore: 40,
-    signals:  { noWebsite: true, lowRatings: false, fewReviews: true },
-  },
-  {
-    keyword:  "HVAC contractor",
-    label:    "HVAC",
+    label:    "Electricians",
     minScore: 45,
-    signals:  { noWebsite: true, lowRatings: false, fewReviews: true },
+    signals: {
+      noWebsite:   true,
+      lowRatings:  false,
+      fewReviews:  true,
+    },
   },
   {
-    keyword:  "pressure washing service",
-    label:    "Pressure Washing",
-    minScore: 30,
-    signals:  { noWebsite: true, lowRatings: false, fewReviews: true },
+    keyword:  "HVAC repair",
+    label:    "HVAC / AC Repair",
+    minScore: 45,
+    signals: {
+      noWebsite:   true,
+      lowRatings:  false,
+      fewReviews:  true,
+    },
   },
   {
-    keyword:  "auto detailing",
-    label:    "Auto Detailing",
-    minScore: 35,
-    signals:  { noWebsite: true, lowRatings: false, fewReviews: true },
+    keyword:  "handyman",
+    label:    "Handyman / General Contractor",
+    minScore: 45,
+    signals: {
+      noWebsite:   true,
+      lowRatings:  false,
+      fewReviews:  true,
+    },
   },
 ];
+
+// ─────────────────────────────────────────────
+// 🚦 TRIGGER SIGNALS
+// Which signals boost a lead's score enough
+// to qualify it for the pipeline
+// ─────────────────────────────────────────────
+export const TRIGGER_SIGNALS = {
+  facebookNoWebsite:   true,   // +40 pts
+  googleMapsNoWebsite: true,   // +40 pts
+  requireBothSignals:  false,  // either one is enough
+};
+
+// ─────────────────────────────────────────────
+// 📦 BATCH TARGET
+// How many qualified leads to collect per run
+// ─────────────────────────────────────────────
+export const BATCH_TARGET = 25;
+
+// ─────────────────────────────────────────────
+// 🏙️  CITY SIZE FILTER
+// "any" = SCOUT decides based on available leads
+// ─────────────────────────────────────────────
+export const CITY_SIZE_FILTER = "any";
 
 // ─────────────────────────────────────────────
 // SCOUT Schedule
