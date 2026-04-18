@@ -1,0 +1,127 @@
+# Replit Error Investigation Protocol
+
+Copy-paste this into Replit chat whenever you encounter an error:
+
+---
+
+## 🔍 ERROR INVESTIGATION PROTOCOL
+
+**Before proposing a fix, help me gather the facts:**
+
+### 1. LOCATE THE ERROR
+```
+Find and show me:
+- The exact error message (full stack trace)
+- The file and line number where it's failing
+- The function or route that's throwing the error
+- Any relevant log output from the last 50 lines
+```
+
+### 2. SHOW THE INVOLVED CODE
+```
+Show me the actual code for:
+- The function that's erroring (full function, not just the line)
+- Any middleware or setup that affects this code path
+- The relevant configuration (environment, dependencies, etc.)
+```
+
+### 3. TRACE THE REQUEST PATH
+```
+For this error, trace:
+- What triggers it? (HTTP request, cron job, user action, etc.)
+- What's the full flow from trigger to error?
+- What data/input causes the error?
+- Show me any relevant test cases or curl commands that reproduce it
+```
+
+### 4. CHECK WHAT'S ALREADY BEEN TRIED
+```
+Search the codebase for:
+- Similar error handling patterns
+- Recent changes to this code (git log if available)
+- Comments or TODOs related to this functionality
+- Any existing workarounds or fallbacks
+```
+
+### 5. VERIFY DEPENDENCIES & ENVIRONMENT
+```
+Check:
+- Are all required environment variables set?
+- Are the dependencies installed and at the correct versions?
+- Is this code working in other environments?
+- Are there any related warnings in the logs before the error?
+```
+
+---
+
+## 📊 COMPILATION FORMAT
+
+Once you've gathered the above, compile it into this format:
+
+```markdown
+## ERROR REPORT
+
+**Error Message:**
+[Exact error text and stack trace]
+
+**Location:**
+- File: [path/to/file.ts:line]
+- Function: [functionName]
+- Route/Trigger: [what invokes this]
+
+**Current Code:**
+```[language]
+[Paste the actual function/middleware that's failing]
+```
+
+**Request Flow:**
+[Trigger] → [Middleware/Function A] → [Function B] → ❌ ERROR
+
+**Data That Causes Error:**
+[Example request/input that reproduces the error]
+
+**Environment Context:**
+- Node version: [version]
+- Key dependencies: [list relevant ones with versions]
+- Environment variables status: [which are set/missing]
+
+**Recent Changes:**
+[Any recent modifications to this code or related code]
+
+**Related Code Patterns:**
+[Similar working code elsewhere in the codebase, if any]
+```
+
+---
+
+## ⚠️ CRITICAL: DO NOT PROPOSE A FIX YET
+
+After compiling the report above:
+
+1. **First**, show me the complete ERROR REPORT
+2. **Then**, ask me: "Should I analyze this or do you want to send this to Claude first?"
+3. **Wait** for my response before proposing any solution
+
+---
+
+**Why this matters:**
+- I need the full picture before diagnosing
+- Jumping to a fix without understanding wastes time
+- The best fix is often different than the obvious fix
+- You're great at finding code, I'm great at analyzing it
+
+---
+
+## 🎯 USAGE EXAMPLE
+
+**❌ DON'T just say:**
+"I'll fix the Slack signature error by adding a verify callback"
+
+**✅ DO say:**
+"I found a 401 error on /webhooks/slack. Let me gather the investigation data..."
+
+[Runs through the 5 steps above]
+
+"Here's the complete error report: [compiled format]
+
+Should I analyze this or do you want to send this to Claude first?"
