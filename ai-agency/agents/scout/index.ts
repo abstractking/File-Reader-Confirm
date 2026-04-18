@@ -18,8 +18,9 @@ import { Task, AgentRunResult }         from "../../core/types";
 import { log }                          from "../../core/logger";
 import { insertLead, getLeadsByStatus } from "../../core/queries";
 import { sendLeadCard }                 from "./slack";
-import { scrapeFromUrl }                from "./scraper";
+import { scrapeFromUrl, RawLead }       from "./scraper";
 import { scoreLead }                    from "./scorer";
+import { sendAlert }                    from "../../core/slack";
 
 // ─────────────────────────────────────────────
 // Main run() — called by PRODUCER dispatcher
@@ -110,12 +111,138 @@ export async function run(task: Task): Promise<AgentRunResult> {
 }
 
 // ─────────────────────────────────────────────
-// runAllTargets — DISABLED in website-input mode
-// Re-enable when Google Places API is activated
+// runAllTargets — Google Places API batch mode
+// Called by cron and by manual scout:once trigger
 // ─────────────────────────────────────────────
 export async function runAllTargets(): Promise<void> {
-  await log("SCOUT", "cron_skipped", { reason: "Google Places API inactive — using manual URL input mode" }, "warning", null);
-  console.log("SCOUT cron is disabled. Submit leads manually via website_url input.");
+  const { resolveTargetLocations, TARGET_NICHES, BATCH_TARGET } = await import("./config");
+
+  const locations = resolveTargetLocations();
+  const location  = locations[0];
+
+  await log("SCOUT", "batch_started", { location, niches: TARGET_NICHES.length }, "success", null);
+  await sendAlert(`🔍 *SCOUT* — Starting batch in *${location}* across ${TARGET_NICHES.length} niches`);
+
+  // Pre-load existing leads for deduplication
+  const existingLeads = await getLeadsByStatus("new");
+  const existingUrls  = new Set(existingLeads.map(r => (r.website_url ?? "").toLowerCase()).filter(Boolean));
+  const existingNames = new Set(existingLeads.map(r => r.business_name.toLowerCase()));
+
+  let totalFound = 0;
+
+  for (const niche of TARGET_NICHES) {
+    if (totalFound >= BATCH_TARGET) {
+      await log("SCOUT", "batch_limit_reached", { total: totalFound }, "success", null);
+      break;
+    }
+
+    await log("SCOUT", "niche_search", { location, keyword: niche.keyword }, "success", null);
+    const leads = await searchPlaces(location, niche.keyword);
+
+    for (const lead of leads) {
+      if (totalFound >= BATCH_TARGET) break;
+
+      // Deduplicate before scoring
+      const isDuplicate =
+        (lead.website_url && existingUrls.has(lead.website_url.toLowerCase())) ||
+        existingNames.has(lead.business_name.toLowerCase());
+
+      if (isDuplicate) {
+        await log("SCOUT", "duplicate_skipped", { business: lead.business_name }, "warning", null);
+        continue;
+      }
+
+      const scored = await scoreLead(lead);
+      if (scored.score < niche.minScore) continue;
+
+      const dbLead = await insertLead({
+        source:        "google_places",
+        business_name: scored.business_name,
+        contact_name:  scored.contact_name  ?? null,
+        email:         scored.email         ?? null,
+        phone:         scored.phone         ?? null,
+        website_url:   scored.website_url   ?? null,
+        niche:         scored.niche,
+        location:      scored.location,
+        notes:         scored.notes         ?? null,
+        score:         scored.score,
+        status:        "new",
+      });
+
+      // Track for in-run dedup
+      if (dbLead.website_url) existingUrls.add(dbLead.website_url.toLowerCase());
+      existingNames.add(dbLead.business_name.toLowerCase());
+
+      await sendLeadCard(dbLead);
+      totalFound++;
+
+      await sleep(500);
+    }
+  }
+
+  await log("SCOUT", "batch_complete", { total: totalFound, location }, "success", null);
+  await sendAlert(`🔍 *SCOUT* — Batch complete. *${totalFound} leads* sent to Slack for review.`);
+}
+
+// ─────────────────────────────────────────────
+// Google Places API (New) — Text Search
+// ─────────────────────────────────────────────
+async function searchPlaces(location: string, keyword: string): Promise<RawLead[]> {
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+  if (!apiKey) throw new Error("GOOGLE_PLACES_API_KEY not set");
+
+  const { MAX_RESULTS_PER_SEARCH, GOOGLE_PLACES_BASE } = await import("./config");
+
+  const url = `${GOOGLE_PLACES_BASE}/places:searchText`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type":     "application/json",
+      "X-Goog-Api-Key":   apiKey,
+      "X-Goog-FieldMask": [
+        "places.displayName",
+        "places.formattedAddress",
+        "places.nationalPhoneNumber",
+        "places.websiteUri",
+        "places.rating",
+        "places.userRatingCount",
+        "places.id",
+        "places.googleMapsUri",
+      ].join(","),
+    },
+    body: JSON.stringify({
+      textQuery: `${keyword} in ${location}`,
+      pageSize:  Math.min(MAX_RESULTS_PER_SEARCH, 20),
+    }),
+  });
+
+  if (!response.ok) {
+    const errBody = await response.text().catch(() => "");
+    await log("SCOUT", "places_api_error", { status: response.status, keyword, location, body: errBody.slice(0, 300) }, "error", null);
+    return [];
+  }
+
+  const data   = await response.json();
+  const places = data.places ?? [];
+
+  return places.map((p: any): RawLead => ({
+    business_name: p.displayName?.text ?? "Unknown",
+    contact_name:  null,
+    phone:         p.nationalPhoneNumber ?? null,
+    email:         null,
+    website_url:   p.websiteUri ?? null,
+    address:       p.formattedAddress ?? null,
+    location,
+    niche:         keyword,
+    rating:        p.rating ?? null,
+    review_count:  p.userRatingCount ?? null,
+    place_id:      p.id ?? `gp_${Date.now()}`,
+    google_url:    p.googleMapsUri ?? "",
+    notes:         !p.websiteUri
+                     ? "No website found on Google Places"
+                     : `Website: ${p.websiteUri}`,
+  }));
 }
 
 function sleep(ms: number) {

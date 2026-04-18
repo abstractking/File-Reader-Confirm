@@ -649,6 +649,29 @@ app.post("/scout/submit", async (req, res) => {
   })();
 });
 
+// ── SCOUT: manual batch run via Google Places API ──
+// POST /scout/run
+// Fires runAllTargets() in background — check Slack for cards
+app.post("/scout/run", async (req, res) => {
+  const token = req.headers["x-api-key"];
+  if (process.env.SUBMIT_API_KEY && token !== process.env.SUBMIT_API_KEY) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  res.json({ ok: true, message: "SCOUT batch started — watch Slack for lead cards" });
+
+  (async () => {
+    try {
+      const { runAllTargets } = await import("../scout/index");
+      await runAllTargets();
+    } catch (err: any) {
+      await log("PRODUCER", "scout_run_error", { error: err.message }, "error");
+      console.error("[PRODUCER] /scout/run error:", err.message);
+    }
+  })();
+});
+
 // ── Dashboard — view recent logs + active projects ──
 // GET /status
 app.get("/status", async (_req, res) => {

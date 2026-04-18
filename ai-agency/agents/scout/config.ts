@@ -113,3 +113,12 @@ export const MAX_RESULTS_PER_SEARCH = 20;
 
 // Google Places API (New) endpoint
 export const GOOGLE_PLACES_BASE = "https://places.googleapis.com/v1";
+
+// ─────────────────────────────────────────────
+// Resolve which locations to search this run
+// Returns full list; callers pick index [0] per
+// run so each cron tick rotates through cities
+// ─────────────────────────────────────────────
+export function resolveTargetLocations(): string[] {
+  return TARGET_LOCATIONS;
+}
