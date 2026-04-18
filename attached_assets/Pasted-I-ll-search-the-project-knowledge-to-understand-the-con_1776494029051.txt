@@ -1,0 +1,219 @@
+I'll search the project knowledge to understand the context around this Slack signature verification issue.Let me search for more specific information about the signature verification implementation:Based on my review of the project knowledge, I can see the issue clearly. The 401 error when qualifying Slack cards is caused by **signature verification failure**. The root problem is in how the raw request body is being captured for Slack's HMAC signature validation.
+
+## The Problem
+
+Slack sends interactive component payloads as `application/x-www-form-urlencoded` with the body being `payload={...JSON...}`. When Express parses this:
+
+1. The body parser middleware parses it into `{ payload: '{"type":"block_actions",...}' }`
+2. For signature verification, Slack expects the **raw unparsed body string**
+3. Currently, the code does `JSON.stringify(req.body)` which creates a JSON representation of the **already-parsed** object
+4. The signatures will never match because you're hashing the wrong string
+
+## The Solution
+
+The middleware is currently set to capture raw body only for exact `application/x-www-form-urlencoded` content-type, but Slack might send it with additional parameters like `;charset=utf-8`.
+
+Here's the fix needed in `/mnt/project/ai-agency/agents/producer/index.ts`:Let me check what files are available in the project:I see - the project only contains the frontend design skill file. Based on the chat history you've provided, here's the comprehensive fix for the Slack signature verification 401 error:
+
+## Root Cause Analysis
+
+The issue occurs because:
+1. **Express body parser** transforms the raw URL-encoded body (`payload={"type":...}`) into a parsed object
+2. **Slack's signature** is computed against the **original raw string**
+3. Your code tries to recreate this by doing `JSON.stringify(req.body)`, but this creates a **different string** than what Slack signed
+4. The HMAC signatures don't match → 401 Unauthorized
+
+## Complete Fix
+
+You need to make **two changes** to `ai-agency/agents/producer/index.ts`:
+
+### 1. Fix the Body Parser Middleware (Lines ~49-53)
+
+**Current code:**
+```typescript
+app.use(
+  "/webhooks/slack",
+  express.raw({ type: "application/x-www-form-urlencoded" })
+);
+```
+
+**Problem:** This only matches the exact content-type. If Slack sends `application/x-www-form-urlencoded; charset=utf-8`, it won't capture the raw body.
+
+**Fixed code:**
+```typescript
+app.use(
+  "/webhooks/slack",
+  express.raw({ 
+    type: "*/*",  // Match all content types for this route
+    verify: (req: any, res, buf) => {
+      // Store raw body as Buffer for signature verification
+      req.rawBody = buf;
+    }
+  })
+);
+```
+
+### 2. Update the Signature Verification Function
+
+**Current code:**
+```typescript
+function verifySlackSignature(req: express.Request): boolean {
+  try {
+    // ... timestamp validation ...
+    
+    const body = req.body instanceof Buffer 
+      ? req.body.toString() 
+      : JSON.stringify(req.body);  // ❌ This is wrong!
+    
+    const sigBase = `v0:${timestamp}:${body}`;
+    // ... rest of verification ...
+  } catch {
+    return false;
+  }
+}
+```
+
+**Fixed code:**
+```typescript
+function verifySlackSignature(req: any): boolean {
+  try {
+    const timestamp = req.headers["x-slack-request-timestamp"] as string;
+    const slackSig  = req.headers["x-slack-signature"] as string;
+    
+    console.log("[DEBUG] Signature verification:", {
+      hasTimestamp: !!timestamp,
+      hasSignature: !!slackSig,
+      hasRawBody: !!req.rawBody,
+      bodyType: req.rawBody?.constructor?.name,
+      contentType: req.headers["content-type"]
+    });
+    
+    if (!timestamp || !slackSig) {
+      console.log("[DEBUG] Missing headers");
+      return false;
+    }
+
+    // Reject requests older than 5 minutes
+    const fiveMinutesAgo = Math.floor(Date.now() / 1000) - 300;
+    if (parseInt(timestamp) < fiveMinutesAgo) {
+      console.log("[DEBUG] Request too old");
+      return false;
+    }
+
+    // Use the raw body captured by the verify callback
+    const body = req.rawBody 
+      ? req.rawBody.toString('utf8')
+      : '';
+      
+    if (!body) {
+      console.log("[DEBUG] No raw body available");
+      return false;
+    }
+
+    const sigBase = `v0:${timestamp}:${body}`;
+    const computed = "v0=" + crypto
+      .createHmac("sha256", SLACK_SIGNING_SECRET)
+      .update(sigBase)
+      .digest("hex");
+
+    const isValid = crypto.timingSafeEqual(
+      Buffer.from(computed), 
+      Buffer.from(slackSig)
+    );
+    
+    console.log("[DEBUG] Signature validation:", {
+      bodyLength: body.length,
+      bodyPreview: body.substring(0, 100),
+      computed: computed.substring(0, 20) + "...",
+      received: slackSig.substring(0, 20) + "...",
+      isValid
+    });
+
+    return isValid;
+  } catch (err: any) {
+    console.error("[DEBUG] Signature verification error:", err.message);
+    return false;
+  }
+}
+```
+
+### 3. Update the Webhook Route to Parse the Body After Verification
+
+**Current code:**
+```typescript
+app.post("/webhooks/slack", async (req, res) => {
+  const rawBody = req.body instanceof Buffer
+    ? req.body.toString()
+    : typeof req.body === "object" && req.body !== null
+    ? JSON.stringify(req.body)
+    : String(req.body ?? "");
+  // ...
+});
+```
+
+**Fixed code:**
+```typescript
+app.post("/webhooks/slack", async (req: any, res) => {
+  // The body is now a Buffer thanks to express.raw()
+  const rawBodyString = req.rawBody 
+    ? req.rawBody.toString('utf8')
+    : req.body?.toString('utf8') || '';
+
+  // Handle URL verification challenge FIRST (before signature check)
+  let parsed: any = {};
+  try { 
+    parsed = JSON.parse(rawBodyString); 
+  } catch {}
+
+  if (parsed?.type === "url_verification") {
+    res.setHeader("Content-Type", "application/json");
+    res.status(200).json({ challenge: parsed.challenge });
+    return;
+  }
+
+  // Verify Slack signature
+  if (!verifySlackSignature(req)) {
+    console.error("[SLACK] Signature verification failed");
+    res.status(401).send("Unauthorized");
+    return;
+  }
+
+  // Slack requires 200 within 3 seconds
+  res.sendStatus(200);
+
+  try {
+    // Parse the URL-encoded body: payload={...json...}
+    const params = new URLSearchParams(rawBodyString);
+    const payload = JSON.parse(params.get("payload") ?? "{}");
+    const action = payload.actions?.[0];
+    
+    if (!action) return;
+    
+    // ... rest of your handler logic ...
+  } catch (err: any) {
+    console.error("[PRODUCER] Webhook error:", err.message);
+  }
+});
+```
+
+## Why This Works
+
+1. **`express.raw({ type: "*/*" })`** - Captures ALL requests to `/webhooks/slack` as raw Buffers before any parsing
+2. **`verify` callback** - Stores the raw Buffer in `req.rawBody` for later use
+3. **Signature verification** - Uses the exact raw bytes that Slack sent and signed
+4. **Manual parsing** - After verification passes, we manually parse the URL-encoded payload
+
+## Testing the Fix
+
+After deploying, test with:
+
+```bash
+# Test URL verification
+curl -X POST https://your-domain.com/webhooks/slack \
+  -H "Content-Type: application/json" \
+  -d '{"type":"url_verification","challenge":"testchallenge123"}'
+
+# Should return: {"challenge":"testchallenge123"}
+```
+
+The debug logs will help you see exactly what's happening during signature verification. Once working, you can remove the console.log statements.

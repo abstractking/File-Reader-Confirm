@@ -77,7 +77,7 @@ const app = express();
 // Raw body for Slack signature verification MUST come before other parsers
 app.use(
   "/webhooks/slack",
-  express.raw({ type: "application/x-www-form-urlencoded" })
+  express.raw({ type: "*/*" })
 );
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
