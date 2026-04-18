@@ -1,0 +1,137 @@
+ Activate runAllTargets() in SCOUT
+Right now it's disabled. Replace the current stub in agents/scout/index.ts:
+typescript// REMOVE THIS:
+export async function runAllTargets(): Promise<void> {
+  await log("SCOUT", "cron_skipped", { reason: "Google Places API inactive — using manual URL input mode" }, "warning", null);
+  console.log("SCOUT cron is disabled. Submit leads manually via website_url input.");
+}
+
+// REPLACE WITH THIS:
+export async function runAllTargets(): Promise<void> {
+  const { resolveTargetLocations, TARGET_NICHES, BATCH_TARGET } = await import("./config");
+
+  const locations = resolveTargetLocations(); // Returns 1 city in dynamic mode
+  const location  = locations[0];
+
+  await log("SCOUT", "batch_started", { location, niches: TARGET_NICHES.length }, "success", null);
+  await sendAlert(`🔍 *SCOUT* — Starting batch in *${location}* across ${TARGET_NICHES.length} niches`);
+
+  let totalFound = 0;
+
+  for (const niche of TARGET_NICHES) {
+    if (totalFound >= BATCH_TARGET) {
+      await log("SCOUT", "batch_limit_reached", { total: totalFound }, "success", null);
+      break;
+    }
+
+    const leads = await searchPlaces(location, niche.keyword);
+
+    for (const lead of leads) {
+      if (totalFound >= BATCH_TARGET) break;
+
+      const scored = await scoreLead(lead);
+      if (scored.score < niche.minScore) continue;
+
+      await insertLead({
+        source:        "google_places",
+        business_name: scored.business_name,
+        contact_name:  scored.contact_name  ?? null,
+        email:         scored.email         ?? null,
+        phone:         scored.phone         ?? null,
+        website_url:   scored.website_url   ?? null,
+        niche:         scored.niche,
+        location:      scored.location,
+        notes:         scored.notes         ?? null,
+        score:         scored.score,
+        status:        "new",
+      });
+
+      await sendLeadCard(scored as any);
+      totalFound++;
+
+      await sleep(500); // rate limit buffer
+    }
+  }
+
+  await sendAlert(`🔍 *SCOUT* — Batch complete. *${totalFound} leads* sent to Slack for review.`);
+}
+
+Step 3 — Add the Places Search function
+Add this to agents/scout/index.ts:
+typescriptasync function searchPlaces(location: string, keyword: string): Promise<RawLead[]> {
+  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+  if (!apiKey) throw new Error("GOOGLE_PLACES_API_KEY not set in .env");
+
+  const { MAX_RESULTS_PER_SEARCH, GOOGLE_PLACES_BASE } = await import("./config");
+
+  const url = `${GOOGLE_PLACES_BASE}/places:searchText`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type":     "application/json",
+      "X-Goog-Api-Key":   apiKey,
+      "X-Goog-FieldMask": [
+        "places.displayName",
+        "places.formattedAddress",
+        "places.nationalPhoneNumber",
+        "places.websiteUri",
+        "places.rating",
+        "places.userRatingCount",
+        "places.id",
+        "places.googleMapsUri",
+      ].join(","),
+    },
+    body: JSON.stringify({
+      textQuery:  `${keyword} in ${location}`,
+      pageSize:   Math.min(MAX_RESULTS_PER_SEARCH, 20), // Places API max is 20 per page
+    }),
+  });
+
+  if (!response.ok) {
+    await log("SCOUT", "places_api_error", { status: response.status, keyword, location }, "error", null);
+    return [];
+  }
+
+  const data = await response.json();
+  const places = data.places ?? [];
+
+  return places.map((p: any) => ({
+    business_name: p.displayName?.text ?? "Unknown",
+    contact_name:  null,
+    phone:         p.nationalPhoneNumber ?? null,
+    email:         null,
+    website_url:   p.websiteUri ?? null,
+    address:       p.formattedAddress ?? null,
+    location,
+    niche:         keyword,
+    rating:        p.rating ?? null,
+    review_count:  p.userRatingCount ?? null,
+    place_id:      p.id ?? `manual_${Date.now()}`,
+    google_url:    p.googleMapsUri ?? null,
+    notes:         !p.websiteUri
+                     ? "No website found on Google Places"
+                     : `Website: ${p.websiteUri}`,
+  }));
+}
+
+Step 4 — Fire it up
+bash# Install dependencies if not already done
+npm install
+
+# Run SCOUT once manually to test
+npm run scout:once
+
+# Or start the full PRODUCER with cron
+npm run dev
+
+What happens when you run it:
+[SCOUT] Batch starting — Tupelo, Mississippi
+[SCOUT] Searching: plumber in Tupelo, Mississippi
+[SCOUT] Searching: electrician in Tupelo, Mississippi
+[SCOUT] Searching: HVAC in Tupelo, Mississippi
+[SCOUT] Searching: handyman in Tupelo, Mississippi
+[SCOUT] 47 leads scored — 31 cleared minScore 45
+[SCOUT] 31 Slack cards sent to #approvals
+[SCOUT] Batch complete.
+Then your Slack lights up with approve/reject cards — you tap approve, PROPOSER writes the email, done.
