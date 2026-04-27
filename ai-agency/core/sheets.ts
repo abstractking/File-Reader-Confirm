@@ -27,6 +27,8 @@ const HEADERS   = [
   "Notes",
   "Score",
   "Status",
+  "City",
+  "State",
 ];
 
 // Pixel widths for each column — wide enough so nothing is cut off
@@ -44,6 +46,8 @@ const COLUMN_WIDTHS = [
   350,  // K — Notes
    70,  // L — Score
    90,  // M — Status
+  150,  // N — City
+  130,  // O — State
 ];
 
 // ─────────────────────────────────────────────
@@ -65,6 +69,17 @@ function getSheetsClient() {
 function parseSheetId(raw: string): string {
   const match = raw.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
   return match ? match[1] : raw;
+}
+
+/** Convert a 0-based column index to a Sheets column letter (0→A, 13→N). */
+function columnLetter(index: number): string {
+  let letter = "";
+  let n = index;
+  while (n >= 0) {
+    letter = String.fromCharCode((n % 26) + 65) + letter;
+    n = Math.floor(n / 26) - 1;
+  }
+  return letter;
 }
 
 /**
@@ -108,10 +123,11 @@ export async function ensureHeaders(): Promise<void> {
     // ── 1. Write headers if row 1 is empty ───
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: `${SHEET_TAB}!A1:M1`,
+      range: `${SHEET_TAB}!A1:O1`,
     });
     const row1 = res.data.values?.[0];
     if (!row1 || row1.length === 0) {
+      // Sheet is blank — write all 15 headers
       await sheets.spreadsheets.values.update({
         spreadsheetId,
         range:            `${SHEET_TAB}!A1`,
@@ -119,8 +135,19 @@ export async function ensureHeaders(): Promise<void> {
         requestBody:      { values: [HEADERS] },
       });
       console.log("[Sheets] ✅ Headers written to row 1");
+    } else if (row1.length < HEADERS.length) {
+      // Existing sheet is missing new columns (City, State) — patch them in
+      const missingValues = HEADERS.slice(row1.length);
+      const startCol      = columnLetter(row1.length); // e.g. "N" for index 13
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range:            `${SHEET_TAB}!${startCol}1`,
+        valueInputOption: "RAW",
+        requestBody:      { values: [missingValues] },
+      });
+      console.log(`[Sheets] ✅ Added missing headers: ${missingValues.join(", ")}`);
     } else {
-      console.log("[Sheets] Headers already present — skipping write");
+      console.log("[Sheets] Headers already complete — skipping write");
     }
 
     // ── 2. Set column widths so nothing is cut off ───
@@ -169,6 +196,11 @@ export async function appendLeadRow(lead: Lead): Promise<void> {
   try {
     const sheets = getSheetsClient();
 
+    // Parse "City, State" from location field e.g. "Lake Charles, Louisiana"
+    const locationParts = (lead.location ?? "").split(",").map(s => s.trim());
+    const city  = locationParts[0] ?? "";
+    const state = locationParts[1] ?? "";
+
     const row = [
       lead.id,
       lead.created_at instanceof Date
@@ -185,11 +217,13 @@ export async function appendLeadRow(lead: Lead): Promise<void> {
       lead.notes         ?? "",
       lead.score         ?? 0,
       lead.status        ?? "new",
+      city,
+      state,
     ];
 
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range:            `${SHEET_TAB}!A:M`,
+      range:            `${SHEET_TAB}!A:O`,
       valueInputOption: "RAW",
       insertDataOption: "INSERT_ROWS",
       requestBody:      { values: [row] },
