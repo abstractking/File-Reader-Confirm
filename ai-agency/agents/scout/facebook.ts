@@ -35,11 +35,12 @@ export async function searchFacebookPages(
   keyword:  string,
   limit:    number = 10,
 ): Promise<RawLead[]> {
-  const apiKey = process.env.GOOGLE_PLACES_API_KEY;
+  // Use dedicated CSE key if provided, otherwise fall back to Places key
+  const apiKey = process.env.GOOGLE_CSE_API_KEY || process.env.GOOGLE_PLACES_API_KEY;
   const cx     = process.env.GOOGLE_CSE_CX;
 
   if (!apiKey) {
-    await log("SCOUT", "fb_search_skipped", { reason: "GOOGLE_PLACES_API_KEY not set" }, "warning", null);
+    await log("SCOUT", "fb_search_skipped", { reason: "No Google API key set" }, "warning", null);
     return [];
   }
 
