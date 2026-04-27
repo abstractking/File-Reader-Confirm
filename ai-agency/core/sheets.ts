@@ -53,11 +53,18 @@ function getSheetsClient() {
 // Safe to call on every startup.
 // ─────────────────────────────────────────────
 export async function ensureHeaders(): Promise<void> {
-  const sheetId = process.env.GOOGLE_SHEET_ID;
-  if (!sheetId) {
+  const rawId = process.env.GOOGLE_SHEET_ID?.trim();
+  if (!rawId) {
     console.warn("[Sheets] GOOGLE_SHEET_ID not set — skipping header check");
     return;
   }
+
+  // If the user pasted the full URL, extract the ID from it automatically
+  // e.g. https://docs.google.com/spreadsheets/d/SHEET_ID/edit
+  const urlMatch = rawId.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  const sheetId  = urlMatch ? urlMatch[1] : rawId;
+
+  console.log(`[Sheets] Using sheet ID: ${sheetId.slice(0, 8)}... (len=${sheetId.length})`);
 
   try {
     const sheets = getSheetsClient();
@@ -94,11 +101,14 @@ export async function ensureHeaders(): Promise<void> {
 // so SCOUT's main flow is never disrupted.
 // ─────────────────────────────────────────────
 export async function appendLeadRow(lead: Lead): Promise<void> {
-  const sheetId = process.env.GOOGLE_SHEET_ID;
-  if (!sheetId) {
+  const rawId = process.env.GOOGLE_SHEET_ID?.trim();
+  if (!rawId) {
     console.warn("[Sheets] GOOGLE_SHEET_ID not set — skipping lead append");
     return;
   }
+
+  const urlMatch = rawId.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  const sheetId  = urlMatch ? urlMatch[1] : rawId;
 
   try {
     const sheets = getSheetsClient();

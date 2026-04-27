@@ -648,6 +648,10 @@ app.post("/scout/submit", async (req, res) => {
       // 4. Send Slack card — Approve / Skip
       await sendLeadCard(lead);
 
+      // 5. Append to Google Sheet immediately (no approval needed)
+      const { appendLeadRow } = await import("../../core/sheets");
+      await appendLeadRow(lead);
+
       await log("PRODUCER", "scout_card_sent", {
         lead_id: lead.id,
         business: lead.business_name,
