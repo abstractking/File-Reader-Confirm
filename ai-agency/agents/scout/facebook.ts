@@ -1,12 +1,12 @@
 // agents/scout/facebook.ts
 // ═════════════════════════════════════════════
-//  Facebook Business Page Search
+//  Facebook Business Page Discovery
 //
-//  Uses DuckDuckGo HTML search (no API key needed)
-//  with site:facebook.com filtering to find
-//  local businesses with only a Facebook presence.
+//  Uses Brave Web Search API (free tier: 2,000 searches/month)
+//  Sign up at: https://api.search.brave.com/
+//  Add key as secret: BRAVE_SEARCH_API_KEY
 //
-//  No secrets required — works out of the box.
+//  Falls back gracefully if key not configured.
 // ═════════════════════════════════════════════
 
 import { RawLead } from "./scraper";
@@ -22,44 +22,61 @@ const FB_NOISE = [
 
 // ─────────────────────────────────────────────
 // searchFacebookPages
-// Uses DuckDuckGo to find Facebook business pages
-// for [keyword] in [location]. No API key needed.
 // ─────────────────────────────────────────────
 export async function searchFacebookPages(
   location: string,
   keyword:  string,
   limit:    number = 10,
 ): Promise<RawLead[]> {
+  const apiKey = process.env.BRAVE_SEARCH_API_KEY;
+
+  if (!apiKey) {
+    await log("SCOUT", "fb_search_skipped", {
+      reason: "BRAVE_SEARCH_API_KEY not configured",
+      action: "Sign up free at https://api.search.brave.com/ — 2,000 searches/month, no credit card",
+    }, "warn", null);
+    return [];
+  }
+
   // Parse "Orlando, Florida" → city + state
   const parts = location.split(",").map(s => s.trim());
   const city  = parts[0] ?? location;
   const state = parts[1] ?? "";
 
-  // Build DuckDuckGo query with site:facebook.com filter
-  const q = `site:facebook.com "${keyword}" "${city}"${state ? ` "${state}"` : ""} -login -groups -events -marketplace`;
+  // site:facebook.com restricts results to Facebook business pages
+  const query = [
+    `site:facebook.com`,
+    `"${keyword}"`,
+    `"${city}"`,
+    state ? `"${state}"` : "",
+    `-login -groups -events -marketplace -watch`,
+  ].filter(Boolean).join(" ");
 
   try {
-    const url = new URL("https://html.duckduckgo.com/html/");
-    url.searchParams.set("q", q);
+    const url = new URL("https://api.search.brave.com/res/v1/web/search");
+    url.searchParams.set("q",     query);
+    url.searchParams.set("count", String(Math.min(limit, 20)));
 
     const res = await fetch(url.toString(), {
-      method:  "GET",
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; LeadBot/1.0; +https://leadbot.io)",
-        "Accept":     "text/html,application/xhtml+xml",
+        "Accept":               "application/json",
+        "Accept-Encoding":      "gzip",
+        "X-Subscription-Token": apiKey,
       },
       signal: AbortSignal.timeout(15_000),
     });
 
     if (!res.ok) {
+      const body = await res.text().catch(() => "");
       await log("SCOUT", "fb_search_error", {
-        keyword, location, status: res.status,
+        status: res.status, keyword, location, body: body.slice(0, 200),
       }, "error", null);
       return [];
     }
 
-    const html = await res.text();
-    const leads = parseDDGResults(html, location, keyword, limit);
+    const json    = await res.json() as BraveSearchResponse;
+    const results = json.web?.results ?? [];
+    const leads   = parseBraveResults(results, location, keyword, limit);
 
     await log("SCOUT", "fb_search_results", {
       keyword, location, found: leads.length,
@@ -76,10 +93,10 @@ export async function searchFacebookPages(
 }
 
 // ─────────────────────────────────────────────
-// Parse DDG HTML response for Facebook URLs
+// Parse Brave Search results into RawLeads
 // ─────────────────────────────────────────────
-function parseDDGResults(
-  html:     string,
+function parseBraveResults(
+  results:  BraveWebResult[],
   location: string,
   keyword:  string,
   limit:    number,
@@ -87,49 +104,35 @@ function parseDDGResults(
   const leads: RawLead[] = [];
   const seen  = new Set<string>();
 
-  // DDG result links appear in <a class="result__url"> or href attributes
-  // pointing to facebook.com pages
-  const linkPattern  = /href="(https?:\/\/(?:www\.)?facebook\.com\/[^"?\s]+)"/gi;
-  const titlePattern = /<a[^>]+class="result__a"[^>]*>([^<]+)<\/a>/gi;
-  const snippetPat   = /<a[^>]+class="result__snippet"[^>]*>([^<]+)<\/a>/gi;
+  for (const result of results) {
+    if (leads.length >= limit) break;
 
-  const urls:     string[] = [];
-  const titles:   string[] = [];
-  const snippets: string[] = [];
+    const url = result.url ?? "";
+    if (!url.includes("facebook.com"))            continue;
+    if (!isFacebookBusinessPage(url))             continue;
 
-  let m: RegExpExecArray | null;
+    const cleanUrl = url.split("?")[0];
+    if (seen.has(cleanUrl)) continue;
+    seen.add(cleanUrl);
 
-  while ((m = linkPattern.exec(html)) !== null)  urls.push(m[1]);
-  while ((m = titlePattern.exec(html)) !== null)  titles.push(m[1]);
-  while ((m = snippetPat.exec(html)) !== null)    snippets.push(m[1]);
-
-  for (let i = 0; i < urls.length && leads.length < limit; i++) {
-    const fbUrl = decodeURIComponent(urls[i]).split("?")[0];
-
-    if (!isFacebookBusinessPage(fbUrl)) continue;
-    if (seen.has(fbUrl)) continue;
-    seen.add(fbUrl);
-
-    const rawTitle  = (titles[i]   ?? "").replace(/&#x27;/g, "'").replace(/&amp;/g, "&").trim();
-    const snippet   = (snippets[i] ?? "").replace(/&#x27;/g, "'").replace(/&amp;/g, "&").trim();
-    const name      = parseTitleToName(rawTitle);
-
+    const name = parseTitleToName(result.title ?? "");
     if (!name || name.length < 3) continue;
 
-    const phone = extractPhone(snippet);
+    const snippet = result.description ?? "";
+    const phone   = extractPhone(snippet);
 
     leads.push({
       business_name: name,
       contact_name:  null,
       phone,
       email:         null,
-      website_url:   fbUrl,   // Facebook IS their website
+      website_url:   cleanUrl,
       address:       null,
       location,
       niche:         keyword,
       rating:        null,
       review_count:  null,
-      place_id:      `fb_${Buffer.from(fbUrl).toString("base64").slice(0, 20)}`,
+      place_id:      `fb_${Buffer.from(cleanUrl).toString("base64").slice(0, 20)}`,
       google_url:    "",
       notes:         `📘 Facebook page only — no dedicated website.\n${snippet.slice(0, 200)}`,
     });
@@ -146,10 +149,6 @@ function isFacebookBusinessPage(url: string): boolean {
   return !FB_NOISE.some(noise => url.toLowerCase().includes(noise));
 }
 
-/**
- * "Joe's Plumbing | Orlando, FL | Facebook" → "Joe's Plumbing"
- * "Joe's Plumbing - Facebook"               → "Joe's Plumbing"
- */
 function parseTitleToName(title: string): string {
   return title
     .replace(/\s*[|\-]\s*Facebook\s*$/i, "")
@@ -160,6 +159,20 @@ function parseTitleToName(title: string): string {
 }
 
 function extractPhone(text: string): string | null {
-  const match = text.match(/\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}/);
-  return match ? match[0].trim() : null;
+  const m = text.match(/\(?\d{3}\)?[\s.\-]\d{3}[\s.\-]\d{4}/);
+  return m ? m[0].trim() : null;
+}
+
+// ─────────────────────────────────────────────
+// Brave Search API Types
+// ─────────────────────────────────────────────
+
+interface BraveSearchResponse {
+  web?: { results: BraveWebResult[] };
+}
+
+interface BraveWebResult {
+  url?:         string;
+  title?:       string;
+  description?: string;
 }
