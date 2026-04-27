@@ -21,6 +21,7 @@ import { sendLeadCard }                 from "./slack";
 import { scrapeFromUrl, RawLead }       from "./scraper";
 import { scoreLead }                    from "./scorer";
 import { sendAlert }                    from "../../core/slack";
+import { appendLeadRow }                from "../../core/sheets";
 
 // ─────────────────────────────────────────────
 // Main run() — called by PRODUCER dispatcher
@@ -89,6 +90,7 @@ export async function run(task: Task): Promise<AgentRunResult> {
   });
 
   await sendLeadCard(dbLead);
+  await appendLeadRow(dbLead);
 
   await log(
     "SCOUT", "lead_sent_to_slack",
@@ -174,6 +176,7 @@ export async function runAllTargets(): Promise<void> {
       existingNames.add(dbLead.business_name.toLowerCase());
 
       await sendLeadCard(dbLead);
+      await appendLeadRow(dbLead);
       totalFound++;
 
       await sleep(500);

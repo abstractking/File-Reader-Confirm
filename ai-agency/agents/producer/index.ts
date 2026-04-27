@@ -777,6 +777,10 @@ async function start() {
     `);
   });
 
+  // Ensure Google Sheet headers are in place
+  const { ensureHeaders } = await import("../../core/sheets");
+  await ensureHeaders();
+
   // Announce online status to Slack
   await sendAlert("🟢 *PRODUCER is online* — AI Agency system started.");
   await log("PRODUCER", "startup", { port: PORT }, "success");
