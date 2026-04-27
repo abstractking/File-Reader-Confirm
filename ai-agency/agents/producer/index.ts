@@ -699,19 +699,20 @@ app.post("/scout/batch-run", async (req, res) => {
     return;
   }
 
-  const { location, niches, limit, inactivityYears, facebookBias } = req.body as any;
+  const { location, niches, limit, inactivityYears, facebookBias, includeFacebook } = req.body as any;
 
   if (!location || !Array.isArray(niches) || !limit) {
     res.status(400).json({ error: "location, niches[], and limit are required" });
     return;
   }
 
-  res.json({ ok: true, message: `SCOUT targeted batch started for ${location} — watch Slack` });
+  const sources = includeFacebook ? "Google Places + Facebook" : "Google Places";
+  res.json({ ok: true, message: `SCOUT batch started for ${location} (${sources}) — watch Slack` });
 
   (async () => {
     try {
       const { runTargetBatch } = await import("../scout/index");
-      await runTargetBatch({ location, niches, limit, inactivityYears, facebookBias });
+      await runTargetBatch({ location, niches, limit, inactivityYears, facebookBias, includeFacebook });
     } catch (err: any) {
       await log("PRODUCER", "scout_batch_run_error", { error: err.message }, "error");
       console.error("[PRODUCER] /scout/batch-run error:", err.message);
