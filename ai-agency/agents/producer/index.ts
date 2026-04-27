@@ -130,6 +130,18 @@ async function processTask(task: Task): Promise<void> {
         metadata:    result.data ?? {},
       };
       ts = await sendBuilderCard(pseudoAsset, task.project!, approval.id, task.id);
+    } else if (task.task_type === "generate_proposal") {
+      const { sendProposalCard } = await import("../proposer/slack");
+      const proposal = {
+        subject_line:  result.data?.subject_line  ?? "",
+        proposal_text: result.data?.proposal_text ?? "",
+        package_id:    result.data?.package_id    ?? "",
+        package_name:  result.data?.package_name  ?? "",
+        price:         result.data?.price          ?? 0,
+        timeline:      result.data?.timeline       ?? "",
+        word_count:    result.data?.word_count     ?? 0,
+      };
+      ts = await sendProposalCard(task.project!, proposal, approval.id, task.id);
     } else {
       ts = await sendApprovalCard(task, result, approval.id);
     }
