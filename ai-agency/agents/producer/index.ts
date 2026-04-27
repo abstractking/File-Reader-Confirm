@@ -645,12 +645,13 @@ app.post("/scout/submit", async (req, res) => {
         status:        "new",
       });
 
-      // 4. Send Slack card — Approve / Skip
-      await sendLeadCard(lead);
-
-      // 5. Append to Google Sheet immediately (no approval needed)
+      // 4. Append to Google Sheet immediately — before Slack so DB save is
+      //    always reflected in the sheet regardless of Slack availability
       const { appendLeadRow } = await import("../../core/sheets");
       await appendLeadRow(lead);
+
+      // 5. Send Slack card — Approve / Skip
+      await sendLeadCard(lead);
 
       await log("PRODUCER", "scout_card_sent", {
         lead_id: lead.id,
@@ -762,6 +763,10 @@ async function start() {
     process.exit(1);
   }
 
+  // Ensure Google Sheet headers are in place BEFORE accepting any requests
+  const { ensureHeaders } = await import("../../core/sheets");
+  await ensureHeaders();
+
   app.listen(PORT, () => {
     console.log(`
 ╔═══════════════════════════════════════════╗
@@ -780,10 +785,6 @@ async function start() {
 ╚═══════════════════════════════════════════╝
     `);
   });
-
-  // Ensure Google Sheet headers are in place
-  const { ensureHeaders } = await import("../../core/sheets");
-  await ensureHeaders();
 
   // Announce online status to Slack
   await sendAlert("🟢 *PRODUCER is online* — AI Agency system started.");

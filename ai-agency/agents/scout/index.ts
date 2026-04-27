@@ -89,8 +89,8 @@ export async function run(task: Task): Promise<AgentRunResult> {
     status:        "new",
   });
 
-  await sendLeadCard(dbLead);
   await appendLeadRow(dbLead);
+  await sendLeadCard(dbLead);
 
   await log(
     "SCOUT", "lead_sent_to_slack",
@@ -175,8 +175,8 @@ export async function runAllTargets(): Promise<void> {
       if (dbLead.website_url) existingUrls.add(dbLead.website_url.toLowerCase());
       existingNames.add(dbLead.business_name.toLowerCase());
 
-      await sendLeadCard(dbLead);
       await appendLeadRow(dbLead);
+      await sendLeadCard(dbLead);
       totalFound++;
 
       await sleep(500);
