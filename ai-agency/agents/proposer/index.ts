@@ -81,7 +81,7 @@ export async function run(task: Task): Promise<AgentRunResult> {
       price:         proposal.price,
       timeline:      proposal.timeline,
       word_count:    proposal.word_count,
-      site_issues:   siteAnalysis?.issues ?? [],
+      site_issues:   siteAnalysis?.issues ??  [],
     },
     metadata: {
       revision:    !!revisionNotes,
