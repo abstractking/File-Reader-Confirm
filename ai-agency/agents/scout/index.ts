@@ -188,13 +188,125 @@ export async function runAllTargets(): Promise<void> {
 }
 
 // ─────────────────────────────────────────────
-// Google Places API (New) — Text Search
+// Parametric Batch Run
+// Called by /scout/batch-run endpoint for
+// one-off market searches (e.g. Orlando, FL)
 // ─────────────────────────────────────────────
-async function searchPlaces(location: string, keyword: string): Promise<RawLead[]> {
+export interface BatchRunOptions {
+  location:          string;
+  niches:            Array<{ keyword: string; label: string; minScore: number }>;
+  limit:             number;
+  inactivityYears?:  number;   // skip businesses with no review newer than N years
+  facebookBias?:     boolean;  // add broad "local services" queries to surface no-website leads
+}
+
+export async function runTargetBatch(options: BatchRunOptions): Promise<void> {
+  const {
+    location,
+    niches,
+    limit,
+    inactivityYears = 2,
+    facebookBias    = false,
+  } = options;
+
+  await log("SCOUT", "target_batch_started", { location, niches: niches.length, limit, facebookBias }, "success", null);
+  await sendAlert(`🔍 *SCOUT* — Starting targeted batch in *${location}* | ${niches.length} niches | limit ${limit}${facebookBias ? " | Facebook-bias ON" : ""}`);
+
+  const existingLeads = await getLeadsByStatus("new");
+  const existingUrls  = new Set(existingLeads.map(r => (r.website_url ?? "").toLowerCase()).filter(Boolean));
+  const existingNames = new Set(existingLeads.map(r => r.business_name.toLowerCase()));
+
+  let totalFound = 0;
+
+  // Build the full query list — niche queries first, broad "local services"
+  // queries appended when facebookBias=true to surface Facebook-only businesses
+  const queries: Array<{ keyword: string; label: string; minScore: number }> = [...niches];
+
+  if (facebookBias) {
+    const broadTerms = [
+      "Local Services In",
+      "home services",
+      "local contractors",
+      "local small business",
+    ];
+    for (const term of broadTerms) {
+      queries.push({ keyword: term, label: "Broad / Local Services", minScore: 40 });
+    }
+  }
+
+  for (const niche of queries) {
+    if (totalFound >= limit) break;
+
+    await log("SCOUT", "niche_search", { location, keyword: niche.keyword }, "success", null);
+    const leads = await searchPlaces(location, niche.keyword, { maxInactivityYears: inactivityYears });
+
+    for (const lead of leads) {
+      if (totalFound >= limit) break;
+
+      const isDuplicate =
+        (lead.website_url && existingUrls.has(lead.website_url.toLowerCase())) ||
+        existingNames.has(lead.business_name.toLowerCase());
+
+      if (isDuplicate) {
+        await log("SCOUT", "duplicate_skipped", { business: lead.business_name }, "warning", null);
+        continue;
+      }
+
+      // Override niche label when broad query matched
+      if (niche.label === "Broad / Local Services" && lead.niche === niche.keyword) {
+        lead.niche = "Local Service Business";
+      }
+
+      const scored = await scoreLead(lead);
+      if (scored.score < niche.minScore) continue;
+
+      const dbLead = await insertLead({
+        source:        "google_places",
+        business_name: scored.business_name,
+        contact_name:  scored.contact_name  ?? null,
+        email:         scored.email         ?? null,
+        phone:         scored.phone         ?? null,
+        website_url:   scored.website_url   ?? null,
+        niche:         scored.niche,
+        location:      scored.location,
+        notes:         scored.notes         ?? null,
+        score:         scored.score,
+        status:        "new",
+      });
+
+      if (dbLead.website_url) existingUrls.add(dbLead.website_url.toLowerCase());
+      existingNames.add(dbLead.business_name.toLowerCase());
+
+      await appendLeadRow(dbLead);
+      await sendLeadCard(dbLead);
+      totalFound++;
+
+      await sleep(400);
+    }
+  }
+
+  await log("SCOUT", "target_batch_complete", { total: totalFound, location }, "success", null);
+  await sendAlert(`🔍 *SCOUT* — Targeted batch complete in *${location}*. *${totalFound} leads* sent to Slack for review.`);
+}
+
+// ─────────────────────────────────────────────
+// Google Places API (New) — Text Search
+// maxInactivityYears: skip businesses whose most
+// recent review is older than N years.
+// businessStatus CLOSED_PERMANENTLY are always skipped.
+// ─────────────────────────────────────────────
+async function searchPlaces(
+  location: string,
+  keyword:  string,
+  opts:     { maxInactivityYears?: number } = {},
+): Promise<RawLead[]> {
   const apiKey = process.env.GOOGLE_PLACES_API_KEY;
   if (!apiKey) throw new Error("GOOGLE_PLACES_API_KEY not set");
 
   const { MAX_RESULTS_PER_SEARCH, GOOGLE_PLACES_BASE } = await import("./config");
+  const cutoffMs = opts.maxInactivityYears
+    ? Date.now() - opts.maxInactivityYears * 365.25 * 24 * 3600 * 1000
+    : 0;
 
   const url = `${GOOGLE_PLACES_BASE}/places:searchText`;
 
@@ -210,6 +322,8 @@ async function searchPlaces(location: string, keyword: string): Promise<RawLead[
         "places.websiteUri",
         "places.rating",
         "places.userRatingCount",
+        "places.businessStatus",
+        "places.reviews",
         "places.id",
         "places.googleMapsUri",
       ].join(","),
@@ -227,25 +341,53 @@ async function searchPlaces(location: string, keyword: string): Promise<RawLead[
   }
 
   const data   = await response.json();
-  const places = data.places ?? [];
+  const places = (data.places ?? []) as any[];
 
-  return places.map((p: any): RawLead => ({
-    business_name: p.displayName?.text ?? "Unknown",
-    contact_name:  null,
-    phone:         p.nationalPhoneNumber ?? null,
-    email:         null,
-    website_url:   p.websiteUri ?? null,
-    address:       p.formattedAddress ?? null,
-    location,
-    niche:         keyword,
-    rating:        p.rating ?? null,
-    review_count:  p.userRatingCount ?? null,
-    place_id:      p.id ?? `gp_${Date.now()}`,
-    google_url:    p.googleMapsUri ?? "",
-    notes:         !p.websiteUri
-                     ? "No website found on Google Places"
-                     : `Website: ${p.websiteUri}`,
-  }));
+  const results: RawLead[] = [];
+
+  for (const p of places) {
+    // Skip permanently closed businesses
+    if (p.businessStatus === "CLOSED_PERMANENTLY") continue;
+
+    // Skip businesses inactive for more than maxInactivityYears
+    // (only if they actually have reviews — no reviews = unknown, allow through)
+    if (cutoffMs > 0 && p.reviews && p.reviews.length > 0) {
+      const latestReviewMs = Math.max(
+        ...p.reviews.map((r: any) => new Date(r.publishTime ?? 0).getTime())
+      );
+      if (latestReviewMs < cutoffMs) {
+        await log("SCOUT", "inactive_skipped", { business: p.displayName?.text, latestReviewMs }, "warning", null);
+        continue;
+      }
+    }
+
+    const hasWebsite    = Boolean(p.websiteUri);
+    const isFacebookOnly = p.websiteUri?.includes("facebook.com");
+
+    const notes = !hasWebsite
+      ? "❌ No website — Facebook/word-of-mouth only. Prime outreach target."
+      : isFacebookOnly
+        ? "📘 Facebook page only — no dedicated website."
+        : `Website: ${p.websiteUri}`;
+
+    results.push({
+      business_name: p.displayName?.text ?? "Unknown",
+      contact_name:  null,
+      phone:         p.nationalPhoneNumber ?? null,
+      email:         null,
+      website_url:   p.websiteUri ?? null,
+      address:       p.formattedAddress ?? null,
+      location,
+      niche:         keyword,
+      rating:        p.rating ?? null,
+      review_count:  p.userRatingCount ?? null,
+      place_id:      p.id ?? `gp_${Date.now()}`,
+      google_url:    p.googleMapsUri ?? "",
+      notes,
+    });
+  }
+
+  return results;
 }
 
 function sleep(ms: number) {

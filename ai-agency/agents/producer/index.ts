@@ -689,6 +689,36 @@ app.post("/scout/run", async (req, res) => {
   })();
 });
 
+// ── SCOUT: one-off targeted batch for a specific market ──
+// POST /scout/batch-run
+// Body: { location, niches, limit, inactivityYears, facebookBias }
+app.post("/scout/batch-run", async (req, res) => {
+  const token = req.headers["x-api-key"];
+  if (process.env.SUBMIT_API_KEY && token !== process.env.SUBMIT_API_KEY) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
+  const { location, niches, limit, inactivityYears, facebookBias } = req.body as any;
+
+  if (!location || !Array.isArray(niches) || !limit) {
+    res.status(400).json({ error: "location, niches[], and limit are required" });
+    return;
+  }
+
+  res.json({ ok: true, message: `SCOUT targeted batch started for ${location} — watch Slack` });
+
+  (async () => {
+    try {
+      const { runTargetBatch } = await import("../scout/index");
+      await runTargetBatch({ location, niches, limit, inactivityYears, facebookBias });
+    } catch (err: any) {
+      await log("PRODUCER", "scout_batch_run_error", { error: err.message }, "error");
+      console.error("[PRODUCER] /scout/batch-run error:", err.message);
+    }
+  })();
+});
+
 // ── Dashboard — view recent logs + active projects ──
 // GET /status
 app.get("/status", async (_req, res) => {
