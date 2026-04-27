@@ -12,8 +12,8 @@
 import { google } from "googleapis";
 import { Lead }   from "./types";
 
-const SHEET_TAB   = "Sheet1";
-const HEADERS     = [
+const SHEET_TAB = "Sheet1";
+const HEADERS   = [
   "ID",
   "Created At",
   "Source",
@@ -29,28 +29,68 @@ const HEADERS     = [
   "Status",
 ];
 
+// Pixel widths for each column — wide enough so nothing is cut off
+const COLUMN_WIDTHS = [
+  280,  // A — ID (UUID)
+  185,  // B — Created At
+  110,  // C — Source
+  200,  // D — Business Name
+  150,  // E — Contact Name
+  200,  // F — Email
+  130,  // G — Phone
+  220,  // H — Website URL
+  120,  // I — Niche
+  180,  // J — Location
+  350,  // K — Notes
+   70,  // L — Score
+   90,  // M — Status
+];
+
 // ─────────────────────────────────────────────
-// Build an authenticated Sheets client
+// Helpers
 // ─────────────────────────────────────────────
+
 function getSheetsClient() {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   if (!raw) throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON secret is not set");
-
   const credentials = JSON.parse(raw);
-
   const auth = new google.auth.GoogleAuth({
     credentials,
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
   });
-
   return google.sheets({ version: "v4", auth });
+}
+
+/** Extract bare spreadsheet ID whether given a full URL or just the ID. */
+function parseSheetId(raw: string): string {
+  const match = raw.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  return match ? match[1] : raw;
+}
+
+/**
+ * Look up the numeric sheetId (gid) for SHEET_TAB.
+ * Returns 0 (first sheet default) if lookup fails.
+ */
+async function getNumericSheetId(
+  sheets: ReturnType<typeof getSheetsClient>,
+  spreadsheetId: string
+): Promise<number> {
+  try {
+    const meta = await sheets.spreadsheets.get({ spreadsheetId, fields: "sheets.properties" });
+    const sheet = meta.data.sheets?.find(
+      s => s.properties?.title === SHEET_TAB
+    );
+    return sheet?.properties?.sheetId ?? 0;
+  } catch {
+    return 0;
+  }
 }
 
 // ─────────────────────────────────────────────
 // ensureHeaders
-// Checks row 1 of the sheet. If it is empty,
-// writes the 13-column header row.
-// Safe to call on every startup.
+// Checks row 1. If empty, writes the 13-column
+// header row. Then sets column widths so all
+// text is fully visible (runs on every startup).
 // ─────────────────────────────────────────────
 export async function ensureHeaders(): Promise<void> {
   const rawId = process.env.GOOGLE_SHEET_ID?.trim();
@@ -59,35 +99,52 @@ export async function ensureHeaders(): Promise<void> {
     return;
   }
 
-  // If the user pasted the full URL, extract the ID from it automatically
-  // e.g. https://docs.google.com/spreadsheets/d/SHEET_ID/edit
-  const urlMatch = rawId.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-  const sheetId  = urlMatch ? urlMatch[1] : rawId;
-
-  console.log(`[Sheets] Using sheet ID: ${sheetId.slice(0, 8)}... (len=${sheetId.length})`);
+  const spreadsheetId = parseSheetId(rawId);
+  console.log(`[Sheets] Using sheet ID: ${spreadsheetId.slice(0, 8)}... (len=${spreadsheetId.length})`);
 
   try {
     const sheets = getSheetsClient();
 
+    // ── 1. Write headers if row 1 is empty ───
     const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: sheetId,
-      range:         `${SHEET_TAB}!A1:M1`,
+      spreadsheetId,
+      range: `${SHEET_TAB}!A1:M1`,
     });
-
     const row1 = res.data.values?.[0];
-    if (row1 && row1.length > 0) {
+    if (!row1 || row1.length === 0) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range:            `${SHEET_TAB}!A1`,
+        valueInputOption: "RAW",
+        requestBody:      { values: [HEADERS] },
+      });
+      console.log("[Sheets] ✅ Headers written to row 1");
+    } else {
       console.log("[Sheets] Headers already present — skipping write");
-      return;
     }
 
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: sheetId,
-      range:         `${SHEET_TAB}!A1`,
-      valueInputOption: "RAW",
-      requestBody: { values: [HEADERS] },
+    // ── 2. Set column widths so nothing is cut off ───
+    const numericSheetId = await getNumericSheetId(sheets, spreadsheetId);
+
+    const requests = COLUMN_WIDTHS.map((pixelSize, colIndex) => ({
+      updateDimensionProperties: {
+        range: {
+          sheetId:          numericSheetId,
+          dimension:        "COLUMNS",
+          startIndex:       colIndex,
+          endIndex:         colIndex + 1,
+        },
+        properties:        { pixelSize },
+        fields:            "pixelSize",
+      },
+    }));
+
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      requestBody: { requests },
     });
 
-    console.log("[Sheets] ✅ Headers written to row 1");
+    console.log("[Sheets] ✅ Column widths set — all text visible");
   } catch (err: any) {
     console.error("[Sheets] ensureHeaders error:", err.message);
   }
@@ -95,10 +152,10 @@ export async function ensureHeaders(): Promise<void> {
 
 // ─────────────────────────────────────────────
 // appendLeadRow
-// Appends one row to the sheet immediately
-// when SCOUT saves a lead to the DB.
-// Errors are caught and logged — never throws
-// so SCOUT's main flow is never disrupted.
+// Appends one row immediately after insertLead.
+// Always runs before Slack so the sheet write
+// is independent of Slack availability.
+// Errors are caught — never throws.
 // ─────────────────────────────────────────────
 export async function appendLeadRow(lead: Lead): Promise<void> {
   const rawId = process.env.GOOGLE_SHEET_ID?.trim();
@@ -107,8 +164,7 @@ export async function appendLeadRow(lead: Lead): Promise<void> {
     return;
   }
 
-  const urlMatch = rawId.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-  const sheetId  = urlMatch ? urlMatch[1] : rawId;
+  const spreadsheetId = parseSheetId(rawId);
 
   try {
     const sheets = getSheetsClient();
@@ -132,11 +188,11 @@ export async function appendLeadRow(lead: Lead): Promise<void> {
     ];
 
     await sheets.spreadsheets.values.append({
-      spreadsheetId: sheetId,
-      range:         `${SHEET_TAB}!A:M`,
-      valueInputOption:        "RAW",
-      insertDataOption:        "INSERT_ROWS",
-      requestBody: { values: [row] },
+      spreadsheetId,
+      range:            `${SHEET_TAB}!A:M`,
+      valueInputOption: "RAW",
+      insertDataOption: "INSERT_ROWS",
+      requestBody:      { values: [row] },
     });
 
     console.log(`[Sheets] ✅ Appended lead: ${lead.business_name}`);
