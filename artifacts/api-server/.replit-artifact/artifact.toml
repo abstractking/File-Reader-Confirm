@@ -10,7 +10,7 @@ name = "API Server"
 paths = ["/"]
 
 [services.development]
-run = "pnpm --filter ai-agency run dev"
+run = "echo 'Dev server managed by PRODUCER workflow — already running on :8080'"
 
 [services.production]
 
