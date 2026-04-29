@@ -1,22 +1,22 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Agency CRM API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: crm
+    description: CRM operations
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +24,225 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /crm/stats:
+    get:
+      operationId: getCrmStats
+      tags: [crm]
+      summary: Get dashboard stats
+      responses:
+        "200":
+          description: Dashboard stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CrmStats"
+
+  /crm/leads:
+    get:
+      operationId: listLeads
+      tags: [crm]
+      summary: List all leads
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [new, qualified, rejected, converted]
+        - name: niche
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: location
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: List of leads
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeadsResponse"
+
+  /crm/leads/{id}:
+    get:
+      operationId: getLead
+      tags: [crm]
+      summary: Get a single lead
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Lead detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Lead"
+        "404":
+          description: Not found
+
+    patch:
+      operationId: updateLead
+      tags: [crm]
+      summary: Update lead status
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateLeadBody"
+      responses:
+        "200":
+          description: Updated lead
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Lead"
+
+  /crm/projects:
+    get:
+      operationId: listProjects
+      tags: [crm]
+      summary: List all projects
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [active, on_hold, complete, cancelled]
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: List of projects
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectsResponse"
+
+  /crm/projects/{id}:
+    get:
+      operationId: getProject
+      tags: [crm]
+      summary: Get a single project
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Project detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectDetail"
+        "404":
+          description: Not found
+
+  /crm/tasks:
+    get:
+      operationId: listTasks
+      tags: [crm]
+      summary: List all tasks
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: project_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: List of tasks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TasksResponse"
+
+  /crm/tasks/{id}/retrigger:
+    post:
+      operationId: retriggerTask
+      tags: [crm]
+      summary: Re-queue a rejected or failed task
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task re-queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RetriggerResponse"
+        "404":
+          description: Not found
+
+  /crm/activity:
+    get:
+      operationId: listActivity
+      tags: [crm]
+      summary: Recent audit log entries
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 30
+      responses:
+        "200":
+          description: Activity list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActivityResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -31,6 +250,166 @@ components:
       properties:
         status:
           type: string
-      required:
-        - status
+      required: [status]
 
+    CrmStats:
+      type: object
+      properties:
+        leads:
+          type: object
+          properties:
+            total: { type: integer }
+            new: { type: integer }
+            qualified: { type: integer }
+            rejected: { type: integer }
+            converted: { type: integer }
+          required: [total, new, qualified, rejected, converted]
+        projects:
+          type: object
+          properties:
+            total: { type: integer }
+            active: { type: integer }
+            complete: { type: integer }
+          required: [total, active, complete]
+        tasks:
+          type: object
+          properties:
+            pending: { type: integer }
+            in_progress: { type: integer }
+            awaiting_approval: { type: integer }
+            failed: { type: integer }
+            complete: { type: integer }
+          required: [pending, in_progress, awaiting_approval, failed, complete]
+      required: [leads, projects, tasks]
+
+    Lead:
+      type: object
+      properties:
+        id: { type: string }
+        created_at: { type: string }
+        source: { type: string }
+        business_name: { type: string }
+        contact_name: { type: string, nullable: true }
+        email: { type: string, nullable: true }
+        phone: { type: string, nullable: true }
+        website_url: { type: string, nullable: true }
+        niche: { type: string, nullable: true }
+        location: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        score: { type: number }
+        status: { type: string, enum: [new, qualified, rejected, converted] }
+      required: [id, created_at, source, business_name, score, status]
+
+    LeadsResponse:
+      type: object
+      properties:
+        leads:
+          type: array
+          items:
+            $ref: "#/components/schemas/Lead"
+        total: { type: integer }
+      required: [leads, total]
+
+    UpdateLeadBody:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [new, qualified, rejected, converted]
+
+    Project:
+      type: object
+      properties:
+        id: { type: string }
+        created_at: { type: string }
+        lead_id: { type: string, nullable: true }
+        client_name: { type: string }
+        client_email: { type: string, nullable: true }
+        project_name: { type: string }
+        niche: { type: string, nullable: true }
+        package: { type: string, nullable: true }
+        price: { type: number, nullable: true }
+        tech_stack: { type: string }
+        status: { type: string, enum: [active, on_hold, complete, cancelled] }
+        current_stage: { type: string }
+        deadline: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+      required: [id, created_at, client_name, project_name, tech_stack, status, current_stage]
+
+    ProjectsResponse:
+      type: object
+      properties:
+        projects:
+          type: array
+          items:
+            $ref: "#/components/schemas/Project"
+        total: { type: integer }
+      required: [projects, total]
+
+    Task:
+      type: object
+      properties:
+        id: { type: string }
+        created_at: { type: string }
+        updated_at: { type: string }
+        project_id: { type: string }
+        agent: { type: string }
+        task_type: { type: string }
+        status: { type: string }
+        priority: { type: integer }
+        error_log: { type: string, nullable: true }
+        retries: { type: integer }
+        project_name: { type: string, nullable: true }
+        client_name: { type: string, nullable: true }
+      required: [id, created_at, updated_at, project_id, agent, task_type, status, priority, retries]
+
+    TasksResponse:
+      type: object
+      properties:
+        tasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/Task"
+        total: { type: integer }
+      required: [tasks, total]
+
+    ProjectDetail:
+      type: object
+      properties:
+        project:
+          $ref: "#/components/schemas/Project"
+        tasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/Task"
+        lead:
+          $ref: "#/components/schemas/Lead"
+          nullable: true
+      required: [project, tasks]
+
+    RetriggerResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        message: { type: string }
+      required: [ok, message]
+
+    ActivityEntry:
+      type: object
+      properties:
+        id: { type: string }
+        created_at: { type: string }
+        project_id: { type: string, nullable: true }
+        agent: { type: string }
+        action: { type: string }
+        status: { type: string }
+      required: [id, created_at, agent, action, status]
+
+    ActivityResponse:
+      type: object
+      properties:
+        activity:
+          type: array
+          items:
+            $ref: "#/components/schemas/ActivityEntry"
+      required: [activity]

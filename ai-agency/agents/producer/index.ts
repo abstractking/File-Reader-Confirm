@@ -74,6 +74,16 @@ const STAGE_MAP: Record<ProjectStage, StageTransition | null> = {
 // ─────────────────────────────────────────────
 const app = express();
 
+// CORS — allow CRM dashboard at /crm/ to call this API
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin",  req.headers.origin ?? "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization,x-api-key");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
+  if (req.method === "OPTIONS") { res.sendStatus(204); return; }
+  next();
+});
+
 // Raw body for Slack signature verification MUST come before other parsers
 app.use(
   "/webhooks/slack",
@@ -749,6 +759,188 @@ app.get("/health", async (_req, res) => {
     ts:             new Date().toISOString(),
     uptime_seconds: Math.floor(process.uptime()),
   });
+});
+
+// ═════════════════════════════════════════════
+// CRM API ROUTES — Read/Write data for dashboard
+// All prefixed with /api/crm/
+// ═════════════════════════════════════════════
+
+// ── GET /api/crm/stats — Dashboard KPI counts ──
+app.get("/api/crm/stats", async (_req, res) => {
+  try {
+    const { query: q } = await import("../../core/db");
+    const [leadStats, projectStats, taskStats] = await Promise.all([
+      q<any>(`
+        SELECT
+          COUNT(*)::int AS total,
+          COUNT(*) FILTER (WHERE status='new')::int AS new,
+          COUNT(*) FILTER (WHERE status='qualified')::int AS qualified,
+          COUNT(*) FILTER (WHERE status='rejected')::int AS rejected,
+          COUNT(*) FILTER (WHERE status='converted')::int AS converted
+        FROM leads
+      `),
+      q<any>(`
+        SELECT
+          COUNT(*)::int AS total,
+          COUNT(*) FILTER (WHERE status='active')::int AS active,
+          COUNT(*) FILTER (WHERE status='complete')::int AS complete
+        FROM projects
+      `),
+      q<any>(`
+        SELECT
+          COUNT(*) FILTER (WHERE status='pending')::int AS pending,
+          COUNT(*) FILTER (WHERE status='in_progress')::int AS in_progress,
+          COUNT(*) FILTER (WHERE status='awaiting_approval')::int AS awaiting_approval,
+          COUNT(*) FILTER (WHERE status='failed')::int AS failed,
+          COUNT(*) FILTER (WHERE status='complete')::int AS complete
+        FROM tasks
+      `),
+    ]);
+    res.json({
+      leads:    leadStats[0],
+      projects: projectStats[0],
+      tasks:    taskStats[0],
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/crm/leads — List leads ──
+app.get("/api/crm/leads", async (req, res) => {
+  try {
+    const { query: q } = await import("../../core/db");
+    const { status, niche, location, limit = "50", offset = "0" } = req.query as any;
+
+    const conditions: string[] = [];
+    const params: any[] = [];
+    let idx = 1;
+
+    if (status)   { conditions.push(`status = $${idx++}`);                                  params.push(status); }
+    if (niche)    { conditions.push(`LOWER(niche) LIKE $${idx++}`);                         params.push(`%${niche.toLowerCase()}%`); }
+    if (location) { conditions.push(`LOWER(location) LIKE $${idx++}`);                      params.push(`%${location.toLowerCase()}%`); }
+
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const leads  = await q(`SELECT * FROM leads ${where} ORDER BY created_at DESC LIMIT $${idx++} OFFSET $${idx++}`, [...params, parseInt(limit), parseInt(offset)]);
+    const countR = await q(`SELECT COUNT(*)::int AS cnt FROM leads ${where}`, params);
+
+    res.json({ leads, total: countR[0]?.cnt ?? 0 });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/crm/leads/:id — Single lead ──
+app.get("/api/crm/leads/:id", async (req, res) => {
+  try {
+    const { query: q } = await import("../../core/db");
+    const rows = await q("SELECT * FROM leads WHERE id = $1", [req.params.id]);
+    if (!rows[0]) { res.status(404).json({ error: "Not found" }); return; }
+    res.json(rows[0]);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── PATCH /api/crm/leads/:id — Update lead status ──
+app.patch("/api/crm/leads/:id", async (req, res) => {
+  try {
+    const { status } = req.body ?? {};
+    if (!status) { res.status(400).json({ error: "status is required" }); return; }
+    const { query: q } = await import("../../core/db");
+    const rows = await q("UPDATE leads SET status = $1 WHERE id = $2 RETURNING *", [status, req.params.id]);
+    if (!rows[0]) { res.status(404).json({ error: "Not found" }); return; }
+    res.json(rows[0]);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/crm/projects — List projects ──
+app.get("/api/crm/projects", async (req, res) => {
+  try {
+    const { query: q } = await import("../../core/db");
+    const { status, limit = "50" } = req.query as any;
+    const conditions: string[] = [];
+    const params: any[] = [];
+    if (status) { conditions.push(`status = $1`); params.push(status); }
+    const where    = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const projects = await q(`SELECT * FROM projects ${where} ORDER BY created_at DESC LIMIT $${params.length + 1}`, [...params, parseInt(limit)]);
+    const countR   = await q(`SELECT COUNT(*)::int AS cnt FROM projects ${where}`, params);
+    res.json({ projects, total: countR[0]?.cnt ?? 0 });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/crm/projects/:id — Project detail + tasks + lead ──
+app.get("/api/crm/projects/:id", async (req, res) => {
+  try {
+    const { query: q } = await import("../../core/db");
+    const projRows = await q("SELECT * FROM projects WHERE id = $1", [req.params.id]);
+    if (!projRows[0]) { res.status(404).json({ error: "Not found" }); return; }
+    const project = projRows[0] as any;
+    const tasks   = await q("SELECT * FROM tasks WHERE project_id = $1 ORDER BY created_at DESC", [req.params.id]);
+    let   lead    = null;
+    if (project.lead_id) {
+      const leadRows = await q("SELECT * FROM leads WHERE id = $1", [project.lead_id]);
+      lead = leadRows[0] ?? null;
+    }
+    res.json({ project, tasks, lead });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/crm/tasks — List tasks (optionally filtered) ──
+app.get("/api/crm/tasks", async (req, res) => {
+  try {
+    const { query: q } = await import("../../core/db");
+    const { status, project_id, limit = "50" } = req.query as any;
+    const conditions: string[] = [];
+    const params: any[] = [];
+    let idx = 1;
+    if (status)     { conditions.push(`t.status = $${idx++}`);     params.push(status); }
+    if (project_id) { conditions.push(`t.project_id = $${idx++}`); params.push(project_id); }
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const tasks = await q(`
+      SELECT t.*, p.project_name, p.client_name
+      FROM tasks t
+      LEFT JOIN projects p ON p.id = t.project_id
+      ${where}
+      ORDER BY t.created_at DESC
+      LIMIT $${idx++}
+    `, [...params, parseInt(limit)]);
+    const countR = await q(`SELECT COUNT(*)::int AS cnt FROM tasks t ${where}`, params);
+    res.json({ tasks, total: countR[0]?.cnt ?? 0 });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/crm/tasks/:id/retrigger — Retry a failed/rejected task ──
+app.post("/api/crm/tasks/:id/retrigger", async (req, res) => {
+  try {
+    const { requeueTask } = await import("../../core/queries");
+    const success = await requeueTask(req.params.id);
+    if (!success) { res.status(404).json({ ok: false, message: "Task not found or not in failed/rejected state" }); return; }
+    res.json({ ok: true, message: "Task re-queued — will run on next heartbeat" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/crm/activity — Recent audit log ──
+app.get("/api/crm/activity", async (req, res) => {
+  try {
+    const { getRecentLogs } = await import("../../core/queries");
+    const limit    = parseInt((req.query.limit as string) ?? "30");
+    const activity = await getRecentLogs(limit);
+    res.json({ activity });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ═════════════════════════════════════════════

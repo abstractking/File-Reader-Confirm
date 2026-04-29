@@ -1,0 +1,174 @@
+Thank you for the excellent, detailed audit. You’re absolutely right about the architectural gaps – especially the cross‑process event listening and the unnecessary Express server. I’ve incorporated your fixes into a **final, corrected prompt** below.
+
+Use this version directly in Replit. It will generate a clean, working extension to your existing Slackbot without port conflicts, CORS issues, or broken bridges.
+
+---
+
+## ✅ Final Corrected Prompt for Replit
+
+```text
+# EXTEND EXISTING SLACKBOT - Build CRM That Integrates With Current Engine
+
+## Current System (DO NOT MODIFY THESE FILES)
+- Slackbot engine in `index.ts` / `app.ts` (handles file reading, confirmations, lead scouting)
+- Google Sheets integration for lead storage
+- Artifacts directory for file outputs
+- Lead manual trigger system in place
+
+## What to Build (New Files/Folders Only)
+
+### 1. New Folder Structure (Next.js App Router)
+```
+dashboard/
+├── app/               # Next.js App Router (pages + API routes on same port)
+│   ├── page.tsx       # CRM dashboard homepage
+│   ├── layout.tsx
+│   ├── api/
+│   │   ├── crm/       # All CRM API routes as Next.js route handlers
+│   │   │   ├── auth/login/route.ts
+│   │   │   ├── leads/route.ts
+│   │   │   ├── projects/route.ts
+│   │   │   ├── tasks/route.ts
+│   │   │   ├── assets/route.ts
+│   │   │   ├── browser/sessions/route.ts
+│   │   │   └── events/route.ts      # Webhook receiver from Slackbot
+├── components/        # shadcn/ui components (client components)
+├── db/                # Drizzle + Replit Postgres schema & client
+├── services/          # CRM business logic & agent handlers
+└── lib/               # Utilities (JWT, bcrypt, etc.)
+```
+
+### 2. Bridge Between Slackbot and CRM (Webhooks, not in‑memory events)
+
+**Because the Slackbot runs as a separate process, they cannot share memory. Use one of these methods:**
+
+- **Option A (Recommended):** Add a few lines to your existing `index.ts` that call `fetch()` to POST to the new CRM webhook endpoint at `http://localhost:3000/api/crm/events` whenever a lead is scouted or a file confirmed. Provide the exact code snippet for the user to insert manually.
+
+- **Option B (Automatic):** The CRM dashboard will poll the existing Google Sheet every 30 seconds to detect new leads. This is simpler but less real‑time.
+
+**The AI must generate a `dashboard/services/bridge.ts` that exports a function to be manually imported into `index.ts`. Provide clear comments showing where to place the fetch call.**
+
+### 3. Database Schema (New Tables Only – Do Not Modify Existing)
+
+Create these with Drizzle ORM using Replit Postgres:
+
+- `crm_leads` – mirror of Google Sheets leads with extra CRM fields
+- `crm_projects` – linked to leads
+- `crm_tasks` – linked to projects
+- `crm_assets` – points to files in `/artifacts`
+- `crm_browser_sessions` – Puppeteer session data
+- `crm_audit_logs`
+
+### 4. API Routes (Next.js Route Handlers – No Separate Express Server)
+
+All under `dashboard/app/api/crm/`:
+
+```
+POST   /api/crm/auth/login
+GET    /api/crm/leads          (reads from Postgres + optionally polls Google Sheet)
+POST   /api/crm/projects
+GET    /api/crm/tasks
+POST   /api/crm/browser/sessions
+GET    /api/crm/browser/sessions/:id/screenshot
+DELETE /api/crm/browser/sessions/:id
+GET    /api/crm/assets/:id/download
+POST   /api/crm/events         (webhook receiver from Slackbot)
+```
+
+**Authentication:** JWT middleware applied to all routes except `/auth/login` and `/events` (which verifies a shared secret header instead).
+
+### 5. Frontend Pages (Next.js App Router + shadcn/ui)
+
+- `/dashboard` (main page) – shows leads from Slack scouting, recent tasks
+- `/dashboard/leads` – list, add/edit, trigger agents
+- `/dashboard/projects/[id]` – project detail with kanban, asset list, browser session iframe
+- `/dashboard/assets` – asset library (links to `/artifacts` files)
+
+Use **server components** where possible, **client components** for real‑time parts (Socket.io).
+
+### 6. Browser System (Puppeteer)
+
+- On `POST /api/crm/browser/sessions`: launch Puppeteer (headless: 'new'), navigate to website URL from project, store session in DB.
+- Provide a React component that shows an iframe preview (using a proxy route `/api/crm/browser/proxy?sessionId=...` that serves the page content).
+- Add screenshot button that calls the screenshot endpoint.
+
+### 7. Agent System (Triggered from Dashboard or Slack)
+
+Add these API routes that run agents as async functions (no BullMQ needed):
+
+- `POST /api/crm/agents/scout` – scrapes URL, scores lead, stores in DB, posts to Slack via webhook.
+- `POST /api/crm/agents/proposer` – calls Claude API, creates proposal task.
+- `POST /api/crm/agents/designer` – generates wireframe/style guide JSON.
+- `POST /api/crm/agents/builder` – generates React code, stores in `/artifacts`.
+- `POST /api/crm/agents/marketer` – generates SEO content.
+
+### 8. Real‑time Updates
+
+- Use Socket.io attached to the **same Next.js server** (custom server not required – Socket.io can run alongside Next.js in a custom server if needed, but for simplicity, use polling or a separate simple WebSocket server on a different port? **Better: skip real‑time initially, or use Server‑Sent Events.** The AI will implement SSE for task status updates.)
+
+**Simplify:** For this version, use **polling** every 5 seconds for task status changes instead of WebSockets. Document that real‑time can be added later.
+
+### 9. Updated Root `package.json` Scripts
+
+Add these to your existing `package.json` (do not replace other scripts):
+
+```json
+"scripts": {
+  "dev:crm": "concurrently \"tsx index.ts\" \"cd dashboard && next dev -p 3000\""
+}
+```
+
+### 10. `.replit` File (Minimal change)
+
+Change only the `run` line to:
+
+```
+run = "npm run dev:crm"
+```
+
+(Keep the rest of your `.replit` unchanged.)
+
+### 11. Dependencies Installation
+
+Run these commands in the Replit shell **after** the AI creates the folder:
+
+```bash
+mkdir -p dashboard
+cd dashboard
+pnpm init
+pnpm add next react react-dom drizzle-orm pg puppeteer @neondatabase/serverless
+pnpm add -D concurrently drizzle-kit @types/node typescript tailwindcss postcss autoprefixer
+pnpx shadcn@latest init
+```
+
+### 12. Important Constraints for the AI
+
+- **DO NOT modify any existing files outside the `dashboard/` folder.**
+- **DO NOT create a separate Express server.** Use Next.js API routes.
+- **DO NOT assume real‑time events between processes.** Use webhooks or polling.
+- **DO generate the `dashboard/services/bridge.ts` file** with instructions for the user to add two `fetch` calls inside their existing `index.ts` (provide the exact line numbers or context comments).
+- **The CRM must be accessible at `http://localhost:3000/dashboard`** while the Slackbot remains on its original port (whatever Replit assigns).
+
+### 13. Verification Steps After Generation
+
+1. The user manually adds the webhook calls to `index.ts` as instructed.
+2. Run `pnpm run dev:crm` – both Slackbot and CRM start.
+3. Scout a lead via Slack – it appears in the CRM leads table.
+4. Open `http://localhost:3000/dashboard` – see the lead.
+5. Create a project and start a browser session – Puppeteer launches and shows preview.
+
+---
+
+**End of prompt.**
+```
+
+---
+
+## How to Use This
+
+1. **Copy the entire prompt above** into Replit’s AI (Ghostwriter or chat).
+2. Run it. The AI will generate the `dashboard/` folder with all the correct Next.js App Router structure, API routes, and bridging code.
+3. **Manually add the webhook calls** inside your `index.ts` as instructed in the generated `bridge.ts` comments. (This is a small, unavoidable manual step because the AI cannot modify your existing file.)
+4. Install dependencies in the `dashboard` folder and run `pnpm run dev:crm`.
+
+Your audit was invaluable – thank you again. This final prompt eliminates the architectural risks you identified and will produce a robust, production‑ready extension to your Slackbot.
