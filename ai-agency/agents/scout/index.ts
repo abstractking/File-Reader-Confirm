@@ -22,7 +22,6 @@ import { scrapeFromUrl, RawLead }       from "./scraper";
 import { scoreLead }                    from "./scorer";
 import { sendAlert }                    from "../../core/slack";
 import { appendLeadRow }                from "../../core/sheets";
-import { searchFacebookPages }          from "./facebook";
 
 // ─────────────────────────────────────────────
 // Main run() — called by PRODUCER dispatcher
@@ -194,12 +193,10 @@ export async function runAllTargets(): Promise<void> {
 // one-off market searches (e.g. Orlando, FL)
 // ─────────────────────────────────────────────
 export interface BatchRunOptions {
-  location:          string;
-  niches:            Array<{ keyword: string; label: string; minScore: number }>;
-  limit:             number;
-  inactivityYears?:  number;   // skip businesses with no review newer than N years
-  facebookBias?:     boolean;  // add broad "local services" queries to surface no-website leads
-  includeFacebook?:  boolean;  // also search Facebook pages via Google CSE (needs GOOGLE_CSE_CX)
+  location:         string;
+  niches:           Array<{ keyword: string; label: string; minScore: number }>;
+  limit:            number;
+  inactivityYears?: number;  // skip businesses whose most recent review is older than N years
 }
 
 export async function runTargetBatch(options: BatchRunOptions): Promise<void> {
@@ -208,13 +205,10 @@ export async function runTargetBatch(options: BatchRunOptions): Promise<void> {
     niches,
     limit,
     inactivityYears = 2,
-    facebookBias    = false,
-    includeFacebook = false,
   } = options;
 
-  const sources = ["Google Places", ...(includeFacebook ? ["Facebook"] : [])].join(" + ");
-  await log("SCOUT", "target_batch_started", { location, niches: niches.length, limit, sources }, "success", null);
-  await sendAlert(`🔍 *SCOUT* — Starting targeted batch in *${location}* | ${niches.length} niches | limit ${limit} | Sources: ${sources}`);
+  await log("SCOUT", "target_batch_started", { location, niches: niches.length, limit }, "success", null);
+  await sendAlert(`🔍 *SCOUT* — Starting batch in *${location}* | ${niches.length} niches | limit ${limit}`);
 
   const existingLeads = await getLeadsByStatus("new");
   const existingUrls  = new Set(existingLeads.map(r => (r.website_url ?? "").toLowerCase()).filter(Boolean));
@@ -222,43 +216,16 @@ export async function runTargetBatch(options: BatchRunOptions): Promise<void> {
 
   let totalFound = 0;
 
-  // Build query list — niche queries first, then broad Facebook-bias queries
-  const queries: Array<{ keyword: string; label: string; minScore: number }> = [...niches];
-
-  if (facebookBias) {
-    for (const term of ["Local Services In", "home services", "local contractors", "local small business"]) {
-      queries.push({ keyword: term, label: "Broad / Local Services", minScore: 40 });
-    }
-  }
-
-  for (const niche of queries) {
+  for (const niche of niches) {
     if (totalFound >= limit) break;
 
     await log("SCOUT", "niche_search", { location, keyword: niche.keyword }, "success", null);
 
-    // ── Fetch Google Places + Facebook in parallel ──────────────────────────
-    const [googleLeads, facebookLeads] = await Promise.all([
-      searchPlaces(location, niche.keyword, { maxInactivityYears: inactivityYears }),
-      includeFacebook
-        ? searchFacebookPages(location, niche.keyword, 10)
-        : Promise.resolve([] as RawLead[]),
-    ]);
+    const leads = await searchPlaces(location, niche.keyword, { maxInactivityYears: inactivityYears });
 
-    // Interleave: Google first, then Facebook leads fill remaining slots
-    // This gives Google Places priority (more structured data) while
-    // Facebook leads add fresh no-website businesses Google missed.
-    const allLeads: Array<{ lead: RawLead; source: string }> = [
-      ...googleLeads.map(l => ({ lead: l, source: "google_places" })),
-      ...facebookLeads.map(l => ({ lead: l, source: "facebook" })),
-    ];
+    await log("SCOUT", "niche_results", { keyword: niche.keyword, found: leads.length }, "success", null);
 
-    await log("SCOUT", "niche_results", {
-      keyword:  niche.keyword,
-      google:   googleLeads.length,
-      facebook: facebookLeads.length,
-    }, "success", null);
-
-    for (const { lead, source } of allLeads) {
+    for (const lead of leads) {
       if (totalFound >= limit) break;
 
       const isDuplicate =
@@ -270,15 +237,11 @@ export async function runTargetBatch(options: BatchRunOptions): Promise<void> {
         continue;
       }
 
-      if (niche.label === "Broad / Local Services" && lead.niche === niche.keyword) {
-        lead.niche = "Local Service Business";
-      }
-
       const scored = await scoreLead(lead);
       if (scored.score < niche.minScore) continue;
 
       const dbLead = await insertLead({
-        source,
+        source:        "google_places",
         business_name: scored.business_name,
         contact_name:  scored.contact_name  ?? null,
         email:         scored.email         ?? null,
@@ -303,7 +266,7 @@ export async function runTargetBatch(options: BatchRunOptions): Promise<void> {
   }
 
   await log("SCOUT", "target_batch_complete", { total: totalFound, location }, "success", null);
-  await sendAlert(`🔍 *SCOUT* — Batch complete in *${location}*. *${totalFound} leads* sent to Slack (Sources: ${sources}).`);
+  await sendAlert(`🔍 *SCOUT* — Batch complete in *${location}*. *${totalFound} leads* sent to Slack.`);
 }
 
 // ─────────────────────────────────────────────
