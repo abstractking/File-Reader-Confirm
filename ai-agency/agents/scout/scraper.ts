@@ -49,7 +49,26 @@ export async function scrapeFromUrl(
     }
 
     const html = await res.text();
-    return extractLeadFromHtml(html, websiteUrl, niche, location);
+    const lead = extractLeadFromHtml(html, websiteUrl, niche, location);
+
+    // If no email found on homepage, try /contact page
+    if (!lead.email) {
+      try {
+        const contactUrl = new URL("/contact", websiteUrl).href;
+        const contactRes = await fetch(contactUrl, {
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; LeadBot/1.0)" },
+          signal: AbortSignal.timeout(5_000),
+        });
+        if (contactRes.ok) {
+          const contactHtml = await contactRes.text();
+          lead.email = extractEmail(contactHtml);
+        }
+      } catch {
+        // contact page doesn't exist — continue without email
+      }
+    }
+
+    return lead;
 
   } catch (err: any) {
     await log("SCOUT", "scrape_url_error", { url: websiteUrl, error: err.message }, "error");
@@ -135,12 +154,28 @@ function extractPhone(html: string): string | null {
 }
 
 function extractEmail(html: string): string | null {
-  const match = html.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
-  if (!match) return null;
-  const email = match[0].toLowerCase();
-  // Filter out common noreply/asset emails
-  if (email.includes("noreply") || email.includes("example") || email.endsWith(".png") || email.endsWith(".jpg")) return null;
-  return email;
+  // 1. Check mailto: href attributes first — most reliable source
+  const mailtoMatches = [...html.matchAll(/href=["']mailto:([^"'?\s]+)/gi)];
+  for (const m of mailtoMatches) {
+    const email = m[1].toLowerCase().trim();
+    if (isValidBusinessEmail(email)) return email;
+  }
+
+  // 2. Scan full HTML for any email pattern
+  const allMatches = [...html.matchAll(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g)];
+  for (const m of allMatches) {
+    const email = m[0].toLowerCase();
+    if (isValidBusinessEmail(email)) return email;
+  }
+
+  return null;
+}
+
+function isValidBusinessEmail(email: string): boolean {
+  const invalid = ["noreply", "no-reply", "example", "sentry", "wixpress", "squarespace"];
+  if (invalid.some(s => email.includes(s))) return false;
+  if (/\.(png|jpg|svg|gif|webp)$/.test(email)) return false;
+  return true;
 }
 
 function extractAddress(html: string): string | null {
