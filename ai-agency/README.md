@@ -1,70 +1,74 @@
 # AI Agency — PRODUCER Setup Guide
 
 ## Stack
-- **Runtime**: Replit (Node.js)
-- **Database**: Replit PostgreSQL (built-in, free with Core)
+- **Runtime**: CodeSandbox Devbox (Node.js 24)
+- **Database**: Neon PostgreSQL (free tier, always-on)
 - **AI**: Claude API (claude-sonnet-4-5)
 - **Notifications**: Slack
 
 ---
 
-## Step 1 — Replit Project Setup
+## Step 1 — Clone into CodeSandbox
 
-1. Create a new Replit → choose **Node.js** template
-2. Upload all files from this folder maintaining the directory structure
-3. Open the **Shell** tab
-
----
-
-## Step 2 — Enable Replit PostgreSQL
-
-1. In your Repl, click **Tools** in the sidebar
-2. Click **Database**
-3. Click **Create a database**
-4. Replit automatically injects `DATABASE_URL` into your environment ✅
+1. Go to codesandbox.io → Create Devbox → Import from GitHub
+2. Import: `abstractking/File-Reader-Confirm`
+3. CodeSandbox will boot the devcontainer automatically
 
 ---
 
-## Step 3 — Add Secrets
+## Step 2 — Set Up Neon Database
 
-In Replit sidebar → **Secrets**, add each key from `.env.example`:
+1. Go to neon.tech → Sign up free → Create project
+2. Copy the connection string (looks like `postgresql://user:pass@ep-xxx.neon.tech/dbname?sslmode=require`)
+3. You will add this as `DATABASE_URL` in the next step
 
-| Secret Key | Where to get it |
+---
+
+## Step 3 — Set Environment Variables
+
+In CodeSandbox → Settings → Environment Variables, add:
+
+| Variable | Value |
 |---|---|
-| `DATABASE_URL` | Replit → Tools → Database → Connection string |
-| `ANTHROPIC_API_KEY` | console.anthropic.com |
-| `SLACK_BOT_TOKEN` | api.slack.com → Your App → OAuth & Permissions |
-| `SLACK_SIGNING_SECRET` | api.slack.com → Your App → Basic Information |
-| `SLACK_CHANNEL_ID` | Right-click #approvals in Slack → View details |
+| `DATABASE_URL` | Your Neon connection string |
+| `ANTHROPIC_API_KEY` | From console.anthropic.com |
+| `SLACK_BOT_TOKEN` | From api.slack.com → OAuth & Permissions |
+| `SLACK_SIGNING_SECRET` | From api.slack.com → Basic Information |
+| `SLACK_CHANNEL_ID` | Right-click #approvals in Slack → View channel details |
+| `PORT` | `8080` |
+| `NODE_ENV` | `development` |
 
 ---
 
 ## Step 4 — Slack App Setup
 
-1. Go to https://api.slack.com/apps → **Create New App** → **From Scratch**
+1. Go to https://api.slack.com/apps → Create New App → From Scratch
 2. Name: `Producer Bot` → select your workspace
-3. **OAuth & Permissions** → Bot Token Scopes → add:
+3. OAuth & Permissions → Bot Token Scopes → add:
    - `chat:write`
    - `chat:write.public`
    - `channels:read`
-4. **Interactivity & Shortcuts** → toggle ON
-   - Request URL: `https://YOUR-REPLIT-URL.replit.app/webhooks/slack`
-5. **Install to Workspace** → copy Bot User OAuth Token
+4. Interactivity & Shortcuts → toggle ON
+   - Request URL: `https://8080-YOUR-DEVBOX-ID.csb.app/webhooks/slack`
+   (Copy this URL from CodeSandbox when your server is running)
+5. Install to Workspace → copy Bot User OAuth Token
 6. Create `#approvals` channel in Slack → invite your bot
 
 ---
 
 ## Step 5 — Install & Initialize
 
+In the CodeSandbox terminal:
+
 ```bash
-# Install dependencies
-npm install
+# Install all dependencies
+pnpm install
 
-# Create all database tables
-npm run db:init
+# Push schema to Neon (creates all 6 tables)
+pnpm --filter @workspace/db run push
 
-# Seed test data (creates a sample project + queues first task)
-npm run db:seed
+# Seed test data
+pnpm --filter ai-agency run db:seed
 ```
 
 ---
@@ -72,78 +76,36 @@ npm run db:seed
 ## Step 6 — Run PRODUCER
 
 ```bash
-# Development (with hot reload)
-npm run dev
+pnpm --filter ai-agency run dev
+```
 
-# You should see:
-# ╔═══════════════════════════════════════════╗
-# ║         🧠  PRODUCER  ONLINE              ║
-# ╚═══════════════════════════════════════════╝
+You should see:
+```
+╔═══════════════════════════════════════════╗
+║         🧠  PRODUCER  ONLINE              ║
+╠═══════════════════════════════════════════╣
+║  Port:       8080                         ║
+║  DB:         Neon PostgreSQL ✅           ║
+║  AI:         Claude API ✅                ║
+╚═══════════════════════════════════════════╝
 ```
 
 ---
 
 ## Step 7 — Update Slack Webhook URL
 
-1. Copy your Replit URL from the browser (e.g. `https://ai-agency.yourname.replit.app`)
-2. Go to your Slack App → **Interactivity & Shortcuts**
-3. Paste: `https://ai-agency.yourname.replit.app/webhooks/slack`
-4. Click **Save Changes**
+1. Copy your CodeSandbox public URL for port 8080
+   (shown in the Ports tab of your Devbox)
+2. Go to your Slack App → Interactivity & Shortcuts
+3. Paste: `https://8080-YOUR-DEVBOX-ID.csb.app/webhooks/slack`
+4. Save Changes
 
 ---
 
 ## Step 8 — Test It
 
-1. Server starts → you get a "🟢 PRODUCER is online" message in #approvals
-2. Within 2 minutes, PRODUCER picks up the seeded task
-3. Sends approval card to #approvals in Slack
-4. Click **✅ Approve** → project advances to DESIGN stage
-5. New task queued for DESIGNER agent
-
----
-
-## API Endpoints
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/health` | Server + DB health check |
-| `GET` | `/status` | Pending tasks + recent logs |
-| `POST` | `/webhooks/slack` | Slack button handler (auto) |
-| `POST` | `/retrigger` | Re-queue a rejected/failed task |
-
-### Re-trigger a rejected task:
 ```bash
-curl -X POST https://YOUR-URL.replit.app/retrigger \
+curl -X POST http://localhost:8080/scout/submit \
   -H "Content-Type: application/json" \
-  -d '{"task_id": "your-task-uuid-here"}'
+  -d '{"business_name":"Test Biz","website_url":"https://example.com","niche":"plumber","location":"Lake Charles LA"}'
 ```
-
----
-
-## Deploy as Always-On
-
-1. In Replit → click **Deploy**
-2. Choose **Reserved VM** (always-on)
-3. Set run command: `npm start`
-4. Your PRODUCER stays live 24/7 ✅
-
----
-
-## Adding New Agents
-
-Each agent just needs to export a `run(task)` function:
-
-```typescript
-// agents/YOUR_AGENT/index.ts
-import { Task, AgentRunResult } from "../../core/types";
-
-export async function run(task: Task): Promise<AgentRunResult> {
-  // your logic here
-  return {
-    summary: "What the agent did",
-    data:    { /* output */ }
-  };
-}
-```
-
-PRODUCER will automatically pick it up — no changes needed to PRODUCER.

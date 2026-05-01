@@ -1,18 +1,13 @@
 // core/db.ts
 // ─────────────────────────────────────────────
-// Replit PostgreSQL client
-// Replit auto-injects DATABASE_URL into env
-// when you enable PostgreSQL in your Repl
+// PostgreSQL client — connects to Neon (or any PostgreSQL via DATABASE_URL)
 // ─────────────────────────────────────────────
 
 import { Pool, PoolClient, QueryResult, QueryResultRow } from "pg";
 
-// Replit injects this automatically — no manual config needed
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === "production"
-    ? { rejectUnauthorized: false }
-    : false,
+  ssl: { rejectUnauthorized: false },
   max:             10,   // max connections in pool
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,

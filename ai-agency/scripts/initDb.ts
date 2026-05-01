@@ -1,7 +1,7 @@
 // scripts/initDb.ts
 // ─────────────────────────────────────────────
-// Run once to create all tables in Replit PostgreSQL
-// Usage: npm run db:init
+// Run once to create all tables in Neon PostgreSQL
+// Usage: pnpm --filter ai-agency run db:init
 // ─────────────────────────────────────────────
 
 import "dotenv/config";
@@ -148,7 +148,7 @@ CREATE INDEX IF NOT EXISTS idx_logs_created     ON audit_logs(created_at DESC);
 `;
 
 async function init() {
-  console.log("🚀 Initializing Replit PostgreSQL schema...\n");
+  console.log("🚀 Initializing Neon PostgreSQL schema...\n");
 
   const client = await pool.connect();
   try {
