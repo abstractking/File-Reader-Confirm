@@ -208,7 +208,7 @@ export async function scrapeGoogleMaps(
 ): Promise<RawLead[]> {
   const apiKey = process.env.GOOGLE_PLACES_API_KEY;
   if (!apiKey) {
-    await log("SCOUT", "missing_api_key", { hint: "Add GOOGLE_PLACES_API_KEY to Replit Secrets" }, "warning");
+    await log("SCOUT", "missing_api_key", { hint: "Add GOOGLE_PLACES_API_KEY to env vars" }, "warning");
     return [];
   }
   try {

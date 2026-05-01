@@ -1,8 +1,8 @@
 // agents/producer/index.ts
 // ═════════════════════════════════════════════════════════
 //  PRODUCER — Central Orchestration Brain
-//  Stack: Replit PostgreSQL + Claude API + Slack
-//  Always-on Express server on Replit
+//  Stack: Neon PostgreSQL + Claude API + Slack
+//  Always-on Express server
 // ═════════════════════════════════════════════════════════
 
 import "dotenv/config";
@@ -981,7 +981,7 @@ async function start() {
 
   const dbOk = await dbPing();
   if (!dbOk) {
-    console.error("❌ Cannot connect to Replit PostgreSQL. Check DATABASE_URL in Secrets.");
+    console.error("❌ Cannot connect to database. Check DATABASE_URL env var.");
     process.exit(1);
   }
 
@@ -995,7 +995,7 @@ async function start() {
 ║         🧠  PRODUCER  ONLINE              ║
 ╠═══════════════════════════════════════════╣
 ║  Port:       ${PORT}                          ║
-║  DB:         Replit PostgreSQL ✅          ║
+║  DB:         Neon PostgreSQL ✅            ║
 ║  AI:         Claude API ✅                 ║
 ║  Heartbeat:  every 2 minutes              ║
 ║                                           ║
